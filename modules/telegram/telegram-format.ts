@@ -47,8 +47,29 @@ export function fmtDuration(ms: number): string {
  * subscription: every enabled owner/operator user that has a private-chat
  * (threadId 0) conversation. Mirrors the fallback rule in
  * `TelegramTaskNotifier`.
+ *
+ * Workspace scoping: by default a chat only receives a notification when its
+ * bound workspace matches the session's directory. Pass `allowAllWorkspaces`
+ * (or enable the `allowAllWorkspaceNotifications` setting) to bypass the
+ * check. Scoping is skipped whenever the session cwd or the conversation's
+ * workspace is unknown, so legacy conversations with no workspace still get
+ * notified.
  */
-export function resolveOwnerChatTargets(store: TelegramStore): ChatTarget[] {
+export interface ResolveTargetsOptions {
+  /** The session/task directory to scope against; null/empty = never scope. */
+  sessionCwd?: string | null;
+  /** When true, ignore the workspace match entirely. */
+  allowAllWorkspaces?: boolean;
+}
+
+export function resolveOwnerChatTargets(
+  store: TelegramStore,
+  options: ResolveTargetsOptions = {},
+): ChatTarget[] {
+  const settings = store.getSettings();
+  const allowAll = options.allowAllWorkspaces ?? settings.allowAllWorkspaceNotifications;
+  const sessionCwd = options.sessionCwd ?? null;
+
   const targets: ChatTarget[] = [];
   const seen = new Set<string>();
 
@@ -63,8 +84,34 @@ export function resolveOwnerChatTargets(store: TelegramStore): ChatTarget[] {
     if (conv.ownerUserId !== null && !users.some((u) => u.telegramUserId === conv.ownerUserId)) {
       continue;
     }
+    if (!workspaceAllows(conv.workspace, sessionCwd, allowAll)) continue;
     seen.add(key);
     targets.push({ chatId: conv.chatId, threadId: conv.threadId });
   }
   return targets;
+}
+
+/**
+ * True when a conversation bound to `convWorkspace` may receive a notification
+ * for a session in `sessionCwd`. Scoping only applies when both paths are
+ * known and non-empty; otherwise the chat qualifies (preserves the legacy
+ * "deliver to every owner chat" behavior for conversations/sessions without a
+ * workspace). `allowAll` disables scoping entirely.
+ */
+export function workspaceAllows(
+  convWorkspace: string | null | undefined,
+  sessionCwd: string | null | undefined,
+  allowAll: boolean,
+): boolean {
+  if (allowAll) return true;
+  const conv = normalizePath(convWorkspace);
+  const cwd = normalizePath(sessionCwd);
+  if (!conv || !cwd) return true; // can't scope when either side is unknown
+  return conv === cwd;
+}
+
+/** Trims + strips trailing slashes so equivalent paths compare equal. */
+function normalizePath(p: string | null | undefined): string {
+  if (!p) return "";
+  return p.trim().replace(/\/+$/, "");
 }

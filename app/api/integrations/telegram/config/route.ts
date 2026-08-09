@@ -36,6 +36,7 @@ interface ConfigBody {
   defaultWorkspace?: unknown;
   toolVerbosity?: unknown;
   dropPendingUpdates?: unknown;
+  allowAllWorkspaceNotifications?: unknown;
   publicUrl?: unknown;
   botApi?: {
     mode?: unknown;
@@ -122,6 +123,10 @@ export async function PUT(req: Request) {
         typeof body.dropPendingUpdates === "boolean"
           ? body.dropPendingUpdates
           : current.dropPendingUpdates,
+      allowAllWorkspaceNotifications:
+        typeof body.allowAllWorkspaceNotifications === "boolean"
+          ? body.allowAllWorkspaceNotifications
+          : current.allowAllWorkspaceNotifications,
       publicUrl,
       botApi,
       updatedAt: Date.now(),
@@ -134,6 +139,7 @@ export async function PUT(req: Request) {
       defaultWorkspace: next.defaultWorkspace,
       toolVerbosity: next.toolVerbosity,
       dropPendingUpdates: next.dropPendingUpdates,
+      allowAllWorkspaceNotifications: next.allowAllWorkspaceNotifications,
       publicUrl: next.publicUrl,
       botApiMode: next.botApi.mode,
       apiRoot: next.botApi.apiRoot,

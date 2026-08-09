@@ -23,8 +23,14 @@ export interface ManualRunNotifyInput {
   status: "success" | "failed";
   /** Optional session display name for context. */
   sessionName?: string | null;
-  /** Optional cwd for context. */
+  /** Actual session working directory — shown in the notification card. */
   cwd?: string | null;
+  /**
+   * Project root of the session cwd, used for worktree-aware workspace
+   * scoping (folds worktree sessions back to the main repo, matching how the
+   * rest of the app groups sessions). Falls back to `cwd` when absent.
+   */
+  sessionProjectRoot?: string | null;
   /** The user prompt that started the run (truncated for display). */
   prompt?: string | null;
   /** Last assistant text excerpt (≤ 4000 chars). */
@@ -57,7 +63,9 @@ export function notifyManualRun(
   store: TelegramStore,
   input: ManualRunNotifyInput,
 ): ManualRunNotifyResult {
-  const targets = resolveOwnerChatTargets(store);
+  const targets = resolveOwnerChatTargets(store, {
+    sessionCwd: input.sessionProjectRoot ?? input.cwd,
+  });
   if (targets.length === 0) return { notified: 0, skipped: true };
 
   let writer: OutboxWriter;

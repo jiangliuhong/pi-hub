@@ -14,10 +14,15 @@ function makeStore() {
   return { store: SqliteTelegramStore.open(join(dir, "app.db")), dir };
 }
 
-function seedOwner(store) {
+function seedOwner(store, workspace) {
   store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
   store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
-  store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42 });
+  store.upsertConversation({
+    chatId: 100,
+    threadId: 0,
+    ownerUserId: 42,
+    ...(workspace !== undefined ? { workspace } : {}),
+  });
 }
 
 test("manual-run: success enqueues to every owner chat", () => {
@@ -93,6 +98,118 @@ test("manual-run: publicUrl renders an open-session link", () => {
     const payload = JSON.parse(store.listOutbox("pending", 1)[0].payloadJson);
     assert.match(payload.text, /打开会话/);
     assert.match(payload.text, /https:\/\/hub\.example\.com\/\?session=sess-3/);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: cross-workspace is notified by default (allowAll on)", () => {
+  const { store, dir } = makeStore();
+  try {
+    seedOwner(store, "/repos/bot-workspace");
+    // No explicit setting → defaults to allowAll=true → cross-workspace OK.
+    const result = notifyManualRun(store, {
+      sessionId: "sess-default",
+      status: "success",
+      cwd: "/repos/other-workspace",
+      finishedAt: 1_700_000_000_010,
+    });
+    assert.equal(result.notified, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: workspace mismatch blocks delivery when scoping is opted in", () => {
+  const { store, dir } = makeStore();
+  try {
+    seedOwner(store, "/repos/bot-workspace");
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+    const result = notifyManualRun(store, {
+      sessionId: "sess-x",
+      status: "success",
+      cwd: "/repos/other-workspace",
+      finishedAt: 1_700_000_000_002,
+    });
+    assert.equal(result.notified, 0); // different workspace → not notified
+    assert.equal(store.countOutbox("pending"), 0);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: allowAllWorkspaceNotifications bypasses the workspace check", () => {
+  const { store, dir } = makeStore();
+  try {
+    seedOwner(store, "/repos/bot-workspace");
+    store.upsertSettings({ allowAllWorkspaceNotifications: true });
+    const result = notifyManualRun(store, {
+      sessionId: "sess-y",
+      status: "success",
+      cwd: "/repos/other-workspace",
+      finishedAt: 1_700_000_000_003,
+    });
+    assert.equal(result.notified, 1);
+    assert.equal(store.countOutbox("pending"), 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: matching workspace is notified; trailing-slash tolerant", () => {
+  const { store, dir } = makeStore();
+  try {
+    seedOwner(store, "/repos/bot-workspace/");
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+    const result = notifyManualRun(store, {
+      sessionId: "sess-z",
+      status: "success",
+      cwd: "/repos/bot-workspace",
+      finishedAt: 1_700_000_000_004,
+    });
+    assert.equal(result.notified, 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: sessionProjectRoot folds worktree sessions to the project root", () => {
+  const { store, dir } = makeStore();
+  try {
+    // Bot is bound to the project root; the session ran inside a worktree.
+    seedOwner(store, "/repos/main");
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+    const result = notifyManualRun(store, {
+      sessionId: "sess-wt",
+      status: "success",
+      cwd: "/repos/main-worktrees/feature", // raw cwd differs
+      sessionProjectRoot: "/repos/main", // resolved root matches the chat
+      finishedAt: 1_700_000_000_005,
+    });
+    assert.equal(result.notified, 1); // worktree → same project → notified
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("manual-run: without sessionProjectRoot, worktree cwd does NOT match", () => {
+  const { store, dir } = makeStore();
+  try {
+    seedOwner(store, "/repos/main");
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+    const result = notifyManualRun(store, {
+      sessionId: "sess-wt-raw",
+      status: "success",
+      cwd: "/repos/main-worktrees/feature", // no resolved root → raw cwd used
+      finishedAt: 1_700_000_000_006,
+    });
+    assert.equal(result.notified, 0); // exact cwd differs → scoped out
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

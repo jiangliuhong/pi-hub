@@ -23,7 +23,7 @@ import type { TaskNotifier, TaskRunNotification, TaskRunDeferredNotification } f
 import type { ExecutionOptions, TaskRun } from "@/modules/scheduler/types";
 
 import { ActionService } from "./telegram-actions";
-import { esc, fmtDuration, fmtTime } from "./telegram-format";
+import { esc, fmtDuration, fmtTime, workspaceAllows } from "./telegram-format";
 import { OutboxWriter, type InlineKeyboardRows, type OutboxMessagePayload } from "./telegram-outbox";
 import type { TelegramStore } from "./telegram-store";
 import type { OutboxEventType } from "./types";
@@ -36,15 +36,24 @@ export interface TelegramTaskNotifierOptions {
   resolveStore: StoreResolver;
   /** Public URL base for "open session" links; null → omit the link button. */
   resolvePublicUrl?: () => string | null;
+  /**
+   * Resolves a cwd to its project root for worktree-aware workspace scoping
+   * (folds worktree sessions back to the main repo). Optional; when absent,
+   * scoping falls back to the raw task cwd. Only invoked when strict
+   * scoping is active (allowAllWorkspaceNotifications off).
+   */
+  resolveProjectRoot?: (cwd: string) => Promise<string>;
 }
 
 export class TelegramTaskNotifier implements TaskNotifier {
   private readonly resolveStore: StoreResolver;
   private readonly resolvePublicUrl?: () => string | null;
+  private readonly resolveProjectRoot?: (cwd: string) => Promise<string>;
 
   constructor(options: TelegramTaskNotifierOptions) {
     this.resolveStore = options.resolveStore;
     this.resolvePublicUrl = options.resolvePublicUrl;
+    this.resolveProjectRoot = options.resolveProjectRoot;
   }
 
   async onRunStarted(event: TaskRunNotification): Promise<void> {
@@ -95,7 +104,11 @@ export class TelegramTaskNotifier implements TaskNotifier {
     }
     if (!store) return; // Telegram not running — silently skip.
 
-    const targets = resolveTargets(store, event.run.taskId);
+    // Worktree-aware scoping: when strict scoping is active, fold the task's
+    // cwd back to its project root so worktree sessions match a chat bound
+    // to the project root (consistent with how the app groups sessions).
+    const scopeCwd = await this.resolveScopeCwd(store, event.run.cwdSnapshot);
+    const targets = resolveTargets(store, event.run.taskId, scopeCwd);
     if (targets.length === 0) return;
 
     let writer: OutboxWriter;
@@ -155,6 +168,26 @@ export class TelegramTaskNotifier implements TaskNotifier {
       return [];
     }
   }
+
+  /**
+   * Returns the cwd to use for workspace scoping. When strict scoping is off
+   * (the default), or no resolver is wired, returns the raw cwd unchanged.
+   * Otherwise resolves the project root so worktree sessions fold back to
+   * the main repo. Never throws — falls back to the raw cwd on failure.
+   */
+  private async resolveScopeCwd(
+    store: TelegramStore,
+    rawCwd: string,
+  ): Promise<string> {
+    const allowAll = store.getSettings().allowAllWorkspaceNotifications;
+    if (allowAll || !rawCwd || !this.resolveProjectRoot) return rawCwd;
+    try {
+      return await this.resolveProjectRoot(rawCwd);
+    } catch (error) {
+      logWarn("projectRoot resolve failed", error);
+      return rawCwd;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,11 +201,19 @@ interface ChatTarget {
 
 /**
  * V1 delivery rule:
- *   1. explicit task subscriptions (notify_started/success/failure flags);
+ *   1. explicit task subscriptions (notify_started/success/failure flags) —
+ *      these are explicit opt-ins and are NEVER workspace-scoped;
  *   2. otherwise every enabled owner/operator user that has a conversation
- *      in a private chat.
+ *      in a private chat, subject to the workspace-scoping rule.
  */
-function resolveTargets(store: TelegramStore, taskId: string | null): ChatTarget[] {
+function resolveTargets(
+  store: TelegramStore,
+  taskId: string | null,
+  sessionCwd: string | null,
+): ChatTarget[] {
+  const settings = store.getSettings();
+  const allowAll = settings.allowAllWorkspaceNotifications;
+
   const targets: ChatTarget[] = [];
   const seen = new Set<string>();
 
@@ -201,6 +242,7 @@ function resolveTargets(store: TelegramStore, taskId: string | null): ChatTarget
     if (conv.ownerUserId !== null && !users.some((u) => u.telegramUserId === conv.ownerUserId)) {
       continue;
     }
+    if (!workspaceAllows(conv.workspace, sessionCwd, allowAll)) continue;
     seen.add(key);
     targets.push({ chatId: conv.chatId, threadId: conv.threadId });
   }

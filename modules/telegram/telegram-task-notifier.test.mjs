@@ -197,3 +197,105 @@ test("notifier: respects notifyOnSuccess/notifyOnFailure flags from the snapshot
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("notifier: cross-workspace delivery is allowed by default", async () => {
+  const { store, dir } = makeStore();
+  try {
+    store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
+    store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
+    store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42, workspace: "/repos/bot-ws" });
+
+    const n = new TelegramTaskNotifier({ resolveStore: () => store });
+    // No explicit setting → defaults to allowAll=true → different cwd still notified.
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/other-ws" }), taskName: "Daily Check" });
+    assert.equal(store.countOutbox("pending"), 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("notifier: default delivery is workspace-scoped when scoping is opted in", async () => {
+  const { store, dir } = makeStore();
+  try {
+    store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
+    store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
+    store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42, workspace: "/repos/bot-ws" });
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+
+    const n = new TelegramTaskNotifier({ resolveStore: () => store });
+    // task runs in a DIFFERENT cwd → no notification
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/other-ws" }), taskName: "Daily Check" });
+    assert.equal(store.countOutbox("pending"), 0);
+
+    // matching cwd → notified
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/bot-ws" }), taskName: "Daily Check" });
+    assert.equal(store.countOutbox("pending"), 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("notifier: allowAllWorkspaceNotifications delivers to every chat", async () => {
+  const { store, dir } = makeStore();
+  try {
+    store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
+    store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
+    store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42, workspace: "/repos/bot-ws" });
+    store.upsertSettings({ allowAllWorkspaceNotifications: true });
+
+    const n = new TelegramTaskNotifier({ resolveStore: () => store });
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/other-ws" }), taskName: "Daily Check" });
+    assert.equal(store.countOutbox("pending"), 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("notifier: resolveProjectRoot folds worktree cwd to the project root for scoping", async () => {
+  const { store, dir } = makeStore();
+  try {
+    store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
+    store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
+    store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42, workspace: "/repos/main" });
+    store.upsertSettings({ allowAllWorkspaceNotifications: false });
+
+    // Fake resolver: any "-worktrees/..." path folds back to the main repo.
+    const foldWorktree = async (cwd) =>
+      cwd.includes("-worktrees/")
+        ? cwd.replace(/-worktrees\/.*$/, "")
+        : cwd;
+    const n = new TelegramTaskNotifier({ resolveStore: () => store, resolveProjectRoot: foldWorktree });
+
+    // Task ran inside a worktree → folds to /repos/main → matches the chat.
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/main-worktrees/feature" }), taskName: "WT Task" });
+    assert.equal(store.countOutbox("pending"), 1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("notifier: resolveProjectRoot is NOT called when scoping is off (default)", async () => {
+  const { store, dir } = makeStore();
+  try {
+    store.upsertUser({ telegramUserId: 42, role: "owner", enabled: true });
+    store.upsertChat({ chatId: 100, chatType: "private", approvedBy: 42 });
+    store.upsertConversation({ chatId: 100, threadId: 0, ownerUserId: 42, workspace: "/repos/main" });
+
+    let calls = 0;
+    const n = new TelegramTaskNotifier({
+      resolveStore: () => store,
+      resolveProjectRoot: async (cwd) => { calls += 1; return cwd; },
+    });
+    // Default allowAll=true → resolver must not be invoked.
+    await n.onRunSucceeded({ run: fakeRun({ cwdSnapshot: "/repos/elsewhere" }), taskName: "x" });
+    assert.equal(store.countOutbox("pending"), 1);
+    assert.equal(calls, 0);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

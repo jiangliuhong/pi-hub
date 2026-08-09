@@ -18,6 +18,10 @@ export async function register(): Promise<void> {
       const notifier = new TelegramTaskNotifier({
         resolveStore: () => getTelegramRuntime()?.getStore() ?? null,
         resolvePublicUrl: () => getTelegramRuntime()?.getSettings()?.publicUrl ?? null,
+        resolveProjectRoot: async (cwd) => {
+          const { resolveProject } = await import("@/lib/worktree");
+          return (await resolveProject(cwd)).projectRoot;
+        },
       });
       return m.startSchedulerRuntime({ notifier });
     })

@@ -22,6 +22,7 @@ export const DEFAULT_TELEGRAM_SETTINGS: Omit<TelegramSettings, "updatedAt"> = {
   defaultWorkspace: null,
   toolVerbosity: "summary",
   dropPendingUpdates: true,
+  allowAllWorkspaceNotifications: true,
   publicUrl: null,
   botApi: {
     mode: "official",

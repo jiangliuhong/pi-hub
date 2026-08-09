@@ -465,6 +465,19 @@ function SetupTab(props: {
     }
   };
 
+  const doToggleAllowAllWorkspaces = async (allowAll: boolean) => {
+    onBusy(true);
+    onError(null);
+    try {
+      const next = await updateTelegramConfig({ allowAllWorkspaceNotifications: allowAll });
+      onConfigChange(next);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      onBusy(false);
+    }
+  };
+
   const doSaveBotApi = async () => {
     onBusy(true);
     onError(null);
@@ -719,6 +732,28 @@ function SetupTab(props: {
             </div>
           </>
         )}
+      </div>
+
+      {/* Notification settings card */}
+      <div style={card}>
+        <CardTitle>通知设置</CardTitle>
+        <Row label="允许所有工作空间">
+          <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={config.allowAllWorkspaceNotifications}
+              onChange={(e) => doToggleAllowAllWorkspaces(e.target.checked)}
+              disabled={busy}
+            />
+            <span>
+              开启后，任务完成通知会发送给所有已授权的会话，不再校验产生 Session 的工作目录与会话绑定的工作空间是否一致。
+            </span>
+          </label>
+        </Row>
+        <p style={{ fontSize: 11, color: "var(--text-muted)", margin: "6px 0 0" }}>
+          默认开启：通知会发送给所有已授权会话（与机器人最初的行为一致）。关闭后，仅当产生 Session
+          的工作目录与会话绑定的工作空间一致时才发送通知，按目录精确匹配（同一仓库的工作树目录会被视为不同工作空间）。
+        </p>
       </div>
 
       {/* Pairing card */}

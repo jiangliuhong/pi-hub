@@ -33,6 +33,7 @@ export interface SettingsUpdate {
   defaultWorkspace?: string | null;
   toolVerbosity?: TelegramSettings["toolVerbosity"];
   dropPendingUpdates?: boolean;
+  allowAllWorkspaceNotifications?: boolean;
   publicUrl?: string | null;
   botApiMode?: TelegramSettings["botApi"]["mode"];
   apiRoot?: string;

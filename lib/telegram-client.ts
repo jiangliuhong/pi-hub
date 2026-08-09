@@ -30,6 +30,7 @@ export interface TelegramConfigDto {
   defaultWorkspace: string | null;
   toolVerbosity: "all" | "summary" | "errors-only" | "none";
   dropPendingUpdates: boolean;
+  allowAllWorkspaceNotifications: boolean;
   publicUrl: string | null;
   botApi: BotApiConfigDto;
   botId: number | null;

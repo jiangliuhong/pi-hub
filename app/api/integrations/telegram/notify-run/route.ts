@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { resolveSessionPath, readSessionHeader, getSessionEntries } from "@/lib/session-reader";
+import { resolveProject } from "@/lib/worktree";
 import { getTelegramRuntime, notifyManualRun } from "@/modules/telegram";
 import type { ManualRunNotifyInput } from "@/modules/telegram";
 
@@ -85,11 +86,29 @@ export async function POST(req: Request) {
     promptExcerpt = body.prompt.trim();
   }
 
+  // Worktree-aware scoping: only resolve the project root when strict
+  // workspace scoping is active (allowAll off). Resolving folds worktree
+  // sessions back to the main repo so they match a chat bound to the project
+  // root — consistent with how the rest of the app groups sessions.
+  let sessionProjectRoot: string | null = null;
+  if (store.getSettings().allowAllWorkspaceNotifications === false && cwd) {
+    try {
+      sessionProjectRoot = (await resolveProject(cwd)).projectRoot;
+    } catch (error) {
+      console.warn(
+        "[pi-hub:telegram] notify-run projectRoot resolve failed",
+        error instanceof Error ? error.message : error,
+      );
+      sessionProjectRoot = cwd; // graceful fallback to the raw cwd
+    }
+  }
+
   const input: ManualRunNotifyInput = {
     sessionId,
     status,
     sessionName,
     cwd,
+    sessionProjectRoot,
     prompt: promptExcerpt,
     resultExcerpt,
     errorMessage:

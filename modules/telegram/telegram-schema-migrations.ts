@@ -172,6 +172,18 @@ const MIGRATIONS: TelegramMigration[] = [
       ALTER TABLE telegram_conversations ADD COLUMN model_id TEXT;
     `,
   },
+  {
+    version: 3,
+    up: `
+      -- Workspace toggle for completion notifications (telegram manual-run +
+      -- scheduled-task default delivery). Defaults to 1 (allow all): preserve
+      -- the original "deliver to every owner/operator chat" behavior and avoid
+      -- any workspace-consistency check out of the box. Set to 0 to enable
+      -- strict (exact-directory) workspace scoping.
+      ALTER TABLE telegram_settings
+        ADD COLUMN allow_all_workspace_notifications INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
 ];
 
 /**

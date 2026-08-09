@@ -61,6 +61,7 @@ interface SettingsRow {
   default_workspace: string | null;
   tool_verbosity: ToolVerbosity;
   drop_pending_updates: number;
+  allow_all_workspace_notifications: number;
   public_url: string | null;
   bot_id: number | null;
   bot_username: string | null;
@@ -178,6 +179,7 @@ function rowToSettings(r: SettingsRow): TelegramSettings {
     defaultWorkspace: r.default_workspace,
     toolVerbosity: r.tool_verbosity,
     dropPendingUpdates: r.drop_pending_updates === 1,
+    allowAllWorkspaceNotifications: r.allow_all_workspace_notifications === 1,
     publicUrl: r.public_url,
     botApi: {
       mode: r.bot_api_mode,
@@ -344,6 +346,9 @@ export class SqliteTelegramStore implements TelegramStore {
       ...(patch.defaultWorkspace !== undefined ? { defaultWorkspace: patch.defaultWorkspace } : {}),
       ...(patch.toolVerbosity !== undefined ? { toolVerbosity: patch.toolVerbosity } : {}),
       ...(patch.dropPendingUpdates !== undefined ? { dropPendingUpdates: patch.dropPendingUpdates } : {}),
+      ...(patch.allowAllWorkspaceNotifications !== undefined
+        ? { allowAllWorkspaceNotifications: patch.allowAllWorkspaceNotifications }
+        : {}),
       ...(patch.publicUrl !== undefined ? { publicUrl: patch.publicUrl } : {}),
       ...(patch.botId !== undefined ? { botId: patch.botId } : {}),
       ...(patch.botUsername !== undefined ? { botUsername: patch.botUsername } : {}),
@@ -365,6 +370,7 @@ export class SqliteTelegramStore implements TelegramStore {
           default_workspace = @default_workspace,
           tool_verbosity = @tool_verbosity,
           drop_pending_updates = @drop_pending_updates,
+          allow_all_workspace_notifications = @allow_all_workspace_notifications,
           public_url = @public_url,
           bot_id = @bot_id,
           bot_username = @bot_username,
@@ -382,6 +388,7 @@ export class SqliteTelegramStore implements TelegramStore {
         default_workspace: next.defaultWorkspace,
         tool_verbosity: next.toolVerbosity,
         drop_pending_updates: next.dropPendingUpdates ? 1 : 0,
+        allow_all_workspace_notifications: next.allowAllWorkspaceNotifications ? 1 : 0,
         public_url: next.publicUrl,
         bot_id: next.botId,
         bot_username: next.botUsername,

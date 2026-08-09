@@ -42,6 +42,7 @@ export interface TelegramConfigDto {
   defaultWorkspace: string | null;
   toolVerbosity: TelegramSettings["toolVerbosity"];
   dropPendingUpdates: boolean;
+  allowAllWorkspaceNotifications: boolean;
   publicUrl: string | null;
   botApi: BotApiConfigDto;
   botId: number | null;
@@ -57,6 +58,7 @@ export function configToDto(s: TelegramSettings): TelegramConfigDto {
     defaultWorkspace: s.defaultWorkspace,
     toolVerbosity: s.toolVerbosity,
     dropPendingUpdates: s.dropPendingUpdates,
+    allowAllWorkspaceNotifications: s.allowAllWorkspaceNotifications,
     publicUrl: s.publicUrl,
     botApi: {
       mode: s.botApi.mode,

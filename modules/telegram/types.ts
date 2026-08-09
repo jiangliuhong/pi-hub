@@ -38,6 +38,14 @@ export interface TelegramSettings {
   defaultWorkspace: string | null;
   toolVerbosity: ToolVerbosity;
   dropPendingUpdates: boolean;
+  /**
+   * When true, completion notifications are delivered to every enabled
+   * owner/operator chat regardless of whether the conversation's workspace
+   * matches the session's directory. When false (default), the default
+   * delivery path only notifies chats whose workspace matches the session
+   * cwd (explicit task subscriptions are never workspace-scoped).
+   */
+  allowAllWorkspaceNotifications: boolean;
   publicUrl: string | null;
   botApi: TelegramBotApiConfig;
   /** Bot identity (from getMe); null until validated. */
