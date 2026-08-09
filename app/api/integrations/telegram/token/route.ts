@@ -4,10 +4,11 @@ import {
   saveLocalToken,
   clearLocalToken,
   isTokenManagedByEnv,
+  getTelegramRuntime,
+  startTelegramRuntime,
   TelegramErrorCode,
   TelegramError,
 } from "@/modules/telegram";
-import { getTelegramRuntime } from "@/modules/telegram";
 
 /**
  * Bot Token write/delete (design doc §21.3). The token is write-only from the
@@ -41,8 +42,17 @@ export async function PUT(req: Request) {
       );
     }
     saveLocalToken(token);
-    const runtime = getTelegramRuntime();
-    void runtime?.restart();
+    // The route can run before instrumentation has finished bootstrapping the
+    // singleton, so make sure a usable runtime exists before updating settings.
+    const runtime = await startTelegramRuntime();
+    // Auto-enable the integration when a token is saved. The settings row
+    // defaults to enabled=false and the runtime skips polling entirely while
+    // it stays false — this was the #1 silent "bot doesn't respond" cause:
+    // token + test-connection both succeed, but no message is ever received.
+    const store = runtime.getStore();
+    if (!store) throw new Error("Telegram runtime is not ready");
+    store.upsertSettings({ enabled: true });
+    void runtime.restart();
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof TelegramError) {

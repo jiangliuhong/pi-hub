@@ -438,6 +438,20 @@ function SetupTab(props: {
     }
   };
 
+  const doSetEnabled = async (enabled: boolean) => {
+    onBusy(true);
+    onError(null);
+    try {
+      const next = await updateTelegramConfig({ enabled });
+      onConfigChange(next);
+      await onRefresh();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      onBusy(false);
+    }
+  };
+
   const doIssuePairing = async () => {
     onBusy(true);
     onError(null);
@@ -522,6 +536,17 @@ function SetupTab(props: {
               @{status.runtime.botUsername} · Leader: {status.runtime.leader ? "是" : "否"}
             </span>
           )}
+        </Row>
+        <Row label="启用">
+          <input
+            type="checkbox"
+            checked={config.enabled}
+            onChange={(e) => doSetEnabled(e.target.checked)}
+            disabled={busy}
+          />
+          <span style={{ marginLeft: 8, color: "var(--text-muted)" }}>
+            {config.enabled ? "已启用，Bot 正在接收消息" : "未启用，Bot 不会接收消息"}
+          </span>
         </Row>
         <Row label="Token 来源">
           {status.tokenSource === "environment"

@@ -672,7 +672,7 @@ function classify(error: unknown): { code: string; message: string } {
  * `globalThis.__piHubTelegramRuntime` (§7.2).
  */
 export async function startTelegramRuntime(): Promise<TelegramRuntime> {
-  if (!globalThis.__piHubTelegramRuntime) {
+  if (!globalThis.__piHubTelegramRuntime || !globalThis.__piHubTelegramRuntime.started) {
     const runtime = new TelegramRuntime();
     try {
       // Build the dispatcher with closures bound to the runtime so it can read
