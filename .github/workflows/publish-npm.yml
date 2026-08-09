@@ -1,0 +1,78 @@
+name: Publish to npm
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Update npm
+        run: npm install --global npm@latest
+
+      - name: Detect package version change
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current="$(node -p "require('./package.json').version")"
+          previous=""
+          if [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+            previous="$(git show "${BEFORE_SHA}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+          fi
+
+          changed=false
+          if [[ -n "$previous" && "$current" != "$previous" ]]; then
+            changed=true
+          fi
+
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "package version: ${previous:-<none>} -> $current"
+
+      - name: Skip unchanged version
+        if: steps.version.outputs.changed != 'true'
+        run: echo "Package version did not change; skipping npm publish."
+
+      - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        run: npm test
+
+      - name: Build package
+        if: steps.version.outputs.changed == 'true'
+        run: npm run build
+
+      - name: Publish package
+        if: steps.version.outputs.changed == 'true'
+        run: npm publish --access public
