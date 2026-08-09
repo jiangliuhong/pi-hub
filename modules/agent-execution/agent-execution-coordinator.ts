@@ -146,7 +146,6 @@ export class AgentExecutionCoordinator {
 // ---------------------------------------------------------------------------
 
 declare global {
-  // eslint-disable-next-line no-var
   var __piHubAgentExecutionCoordinator: AgentExecutionCoordinator | undefined;
 }
 

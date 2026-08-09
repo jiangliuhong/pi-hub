@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
-import { ChatWindow } from "./ChatWindow";
+import { PiHubChatWindow } from "./PiHubChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { ModelsConfig } from "./ModelsConfig";
@@ -638,17 +638,7 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
       />
-      <div
-        className="sidebar-utility-nav"
-        style={{
-          padding: "8px 10px 10px",
-          flexShrink: 0,
-          display: "grid",
-          gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-          gap: 4,
-          borderTop: "1px solid var(--border)",
-        }}
-      >
+      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           {
              label: translate("common.models"),
@@ -717,23 +707,17 @@ export function AppShell() {
             disabled={disabled}
             title={label}
             style={{
-              minWidth: 0,
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
-              height: 46, padding: "4px 2px", background: "none", border: "none",
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              height: 32, padding: 0, background: "none", border: "none",
               borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
-              fontSize: 11, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden",
-              opacity: disabled ? 0.35 : 1,
+              fontSize: 12, opacity: disabled ? 0.35 : 1,
               transition: "background 0.12s, color 0.12s",
             }}
             onMouseEnter={(e) => { if (!disabled) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; } }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 16, flexShrink: 0 }}>
-              {icon}
-            </span>
-            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {label}
-            </span>
+            {icon}
+            {label}
           </button>
         ))}
       </div>
@@ -1520,7 +1504,7 @@ export function AppShell() {
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {showChat ? (
-            <ChatWindow
+            <PiHubChatWindow
               key={sessionKey}
               session={selectedSession}
               newSessionCwd={effectiveNewSessionCwd}

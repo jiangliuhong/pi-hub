@@ -49,7 +49,7 @@ export function authorize(args: {
     return { allowed: false, user: null, chat: null, denyCode: "TELEGRAM_USER_NOT_ALLOWED" };
   }
 
-  let chat = store.getChat(chatId);
+  const chat = store.getChat(chatId);
   if (chatType !== "private") {
     if (!chat || !chat.enabled) {
       return { allowed: false, user, chat, denyCode: "TELEGRAM_CHAT_NOT_ALLOWED" };

@@ -16,7 +16,6 @@ import type {
   TelegramNotificationOutboxEntry,
   TelegramPairingCode,
   TelegramRole,
-  TelegramRuntimeLease,
   TelegramSettings,
   TelegramTaskSubscription,
   TelegramUser,

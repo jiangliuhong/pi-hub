@@ -10,10 +10,8 @@ import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { useI18n } from "@/hooks/useI18n";
-import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
+import { useAgentSession, type AgentPhase, type NoticeItem, type PromptFinishedInfo } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
-import { useTelegramNotify } from "@/hooks/useTelegramNotify";
-import { notifyTelegramManualRun } from "@/lib/telegram-client";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -25,7 +23,7 @@ import {
   VISIBLE_PAGE_SIZE,
 } from "@/lib/chat-lazy-load";
 
-interface Props {
+export interface ChatWindowProps {
   session: SessionInfo | null;
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
@@ -39,6 +37,8 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  onPromptFinished?: (info: PromptFinishedInfo) => void;
+  inputExtraControls?: ReactNode;
 }
 
 function phaseLabel(phase: AgentPhase, t: (key: string, params?: Record<string, string | number>) => string): string | null {
@@ -172,10 +172,9 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children, t }: { mes
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onPromptFinished, inputExtraControls }: ChatWindowProps) {
   const { t } = useI18n();
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
-  const { notifyEnabled, notifyEnabledRef, onNotifyToggle, telegramConfigured } = useTelegramNotify();
   const isMobile = useIsMobile();
 
   // Wrap onAgentEnd to play the completion sound. This is more reliable than
@@ -193,30 +192,6 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     }
     onAgentEnd?.();
   }, [onAgentEnd]);
-
-  // Dispatch a Telegram notification when a user-driven run reaches a
-  // terminal state and the toggle is on. Fire-and-forget: a flaky Telegram
-  // integration must never disturb the chat. Reads the ref so toggling the
-  // preference mid-run does not retroactively fire.
-  const wrappedOnPromptFinished = useCallback(
-    (info: { runId: string; status: "success" | "failed"; sessionId: string | null; userPrompt: string | null; startedAt: number | null; finishedAt: number; errorMessage?: string | null }) => {
-      if (!notifyEnabledRef.current) return;
-      if (!info.sessionId) return;
-      void notifyTelegramManualRun({
-        sessionId: info.sessionId,
-        runId: info.runId,
-        runSource: "web",
-        status: info.status,
-        prompt: info.userPrompt ?? undefined,
-        errorMessage: info.errorMessage ?? undefined,
-        startedAt: info.startedAt ?? undefined,
-        finishedAt: info.finishedAt,
-      }).catch((e) => {
-        console.warn("Telegram notify-run failed", e instanceof Error ? e.message : e);
-      });
-    },
-    [notifyEnabledRef],
-  );
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((message: UserMessage) => {
@@ -243,7 +218,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   } = useAgentSession({
     session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
-    onPromptFinished: wrappedOnPromptFinished,
+    onPromptFinished,
   });
   const sessionBusy = agentRunning || bashRunning;
 
@@ -523,9 +498,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
       soundEnabled={soundEnabled}
       onSoundToggle={onSoundToggle}
       onAudioUnlock={unlockAudio}
-      notifyTelegramEnabled={notifyEnabled}
-      onNotifyTelegramToggle={onNotifyToggle}
-      telegramConfigured={telegramConfigured}
+      extraControls={inputExtraControls}
       draftKey={session?.id ?? (newSessionCwd ? `new:${newSessionCwd}` : undefined)}
       cwd={session?.cwd ?? newSessionCwd}
     />

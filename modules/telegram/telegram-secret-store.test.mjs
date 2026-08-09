@@ -24,7 +24,7 @@ function withHubHome(fn) {
 test(
   "secret-store: env var wins and is read-only",
   withHubHome(async () => {
-    const { resolveToken, resolveTokenSource, saveLocalToken, isTokenManagedByEnv } =
+    const { resolveToken, saveLocalToken, isTokenManagedByEnv } =
       await jiti.import("./telegram-secret-store.ts");
     process.env.PI_HUB_TELEGRAM_BOT_TOKEN = "111:env-token";
     try {
@@ -40,7 +40,7 @@ test(
 
 test(
   "secret-store: local file with 0600 permissions",
-  withHubHome(async (dir) => {
+  withHubHome(async () => {
     const { saveLocalToken, resolveToken, clearLocalToken, getSecretsPath } =
       await jiti.import("./telegram-secret-store.ts");
     saveLocalToken("222:local-token");

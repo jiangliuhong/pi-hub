@@ -138,6 +138,17 @@ export type BuiltinSlashCommandResult =
   | { handled: false }
   | { handled: true; message?: string; error?: string; action?: "openSessionStats" };
 
+export interface PromptFinishedInfo {
+  /** Stable run id (UUID) generated at send time. */
+  runId: string;
+  status: "success" | "failed";
+  sessionId: string | null;
+  userPrompt: string | null;
+  startedAt: number | null;
+  finishedAt: number;
+  errorMessage?: string | null;
+}
+
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
   newSessionCwd: string | null;
@@ -150,24 +161,8 @@ export interface UseAgentSessionOptions {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsPanelOpen?: () => void;
   setToolPreset?: (preset: "none" | "default" | "full") => void;
-  /**
-   * Fires once per Web-originated prompt run when it reaches a terminal state
-   * (success via `prompt_done`, or failure via `prompt_error`). Used by the
-   * chat layer to dispatch external notifications (e.g. Telegram). Only runs
-   * whose terminal event carries a `runId` we issued ourselves fire this — a
-   * Telegram/scheduler/API run sharing the same session never triggers a Web
-   * completion notification.
-   */
-  onPromptFinished?: (info: {
-    /** Stable run id (UUID) generated at send time. */
-    runId: string;
-    status: "success" | "failed";
-    sessionId: string | null;
-    userPrompt: string | null;
-    startedAt: number | null;
-    finishedAt: number;
-    errorMessage?: string | null;
-  }) => void;
+  /** Fires once when a prompt started by this Web client reaches a terminal state. */
+  onPromptFinished?: (info: PromptFinishedInfo) => void;
 }
 
 export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -433,15 +428,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const thinkingLevelOverrideRef = useRef<Exclude<ThinkingLevelOption, "auto"> | null>(null);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
-  /** Prompt text of the in-flight run (for completion notifications). */
+  /** Prompt text of the in-flight run (for terminal observers). */
   const currentRunPromptRef = useRef<string | null>(null);
   /** Epoch ms when the in-flight run started. */
   const currentRunStartedAtRef = useRef<number | null>(null);
   /**
    * The stable runId of the Web-originated prompt currently in flight, plus
-   * the set of runIds already notified. Shared AgentSessions emit terminal
-   * events for Telegram/scheduler runs too; only an event whose runId matches
-   * a Web run we started is allowed to trigger a Web completion notification.
+   * the set of runIds already surfaced. Shared AgentSessions emit terminal
+   * events for runs from other sources too; only an event whose runId matches
+   * a Web run we started is allowed to trigger this client's observer.
    */
   const activeWebRunIdRef = useRef<string | null>(null);
   const notifiedWebRunIdsRef = useRef<Set<string>>(new Set());
@@ -899,9 +894,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       status: "success" | "failed",
       errorMessage?: string | null,
     ): boolean => {
-      // Only Web-owned runs may trigger a Web completion notification. A
+      // Only Web-owned runs may trigger this client's terminal observer. A
       // terminal event without a runId (legacy/extension runs) or from another
-      // surface (telegram/scheduler/api) must refresh state but not notify.
+      // source must refresh state but not notify.
       if (eventRunSource !== "web" || typeof eventRunId !== "string" || !eventRunId) {
         return false;
       }

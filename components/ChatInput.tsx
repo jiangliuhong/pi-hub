@@ -67,12 +67,8 @@ interface Props {
   soundEnabled?: boolean;
   onSoundToggle?: () => void;
   onAudioUnlock?: () => void;
-  /** Whether Telegram notify-on-completion is enabled (sticky toggle). */
-  notifyTelegramEnabled?: boolean;
-  /** Toggles the Telegram notify-on-completion preference. */
-  onNotifyTelegramToggle?: () => void;
-  /** When false, the Telegram notify button is hidden (nowhere to send). */
-  telegramConfigured?: boolean;
+  /** Optional controls supplied by an application-level integration wrapper. */
+  extraControls?: React.ReactNode;
   draftKey?: string;
   /** Session working directory — enables the @ file autocomplete menu */
   cwd?: string | null;
@@ -359,7 +355,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   onBuiltinCommand,
   soundEnabled, onSoundToggle, onAudioUnlock,
-  notifyTelegramEnabled, onNotifyTelegramToggle, telegramConfigured,
+  extraControls,
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
@@ -2382,42 +2378,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 )}
               </button>
             )}
-            {telegramConfigured && onNotifyTelegramToggle !== undefined && (
-              <button
-                onClick={onNotifyTelegramToggle}
-                title={notifyTelegramEnabled ? t("chat.disableTelegramNotify") : t("chat.enableTelegramNotify")}
-                aria-label={notifyTelegramEnabled ? t("chat.disableTelegramNotify") : t("chat.enableTelegramNotify")}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                  width: isMobile ? 32 : 32,
-                  height: 32,
-                  padding: 0,
-                  background: "none",
-                  border: "none",
-                  borderRadius: 9,
-                  color: notifyTelegramEnabled ? "var(--accent)" : "var(--text-dim)",
-                  cursor: "pointer",
-                  opacity: notifyTelegramEnabled ? 1 : 0.55,
-                  transition: "background 0.12s, color 0.12s, opacity 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text)";
-                  e.currentTarget.style.opacity = "1";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = notifyTelegramEnabled ? "var(--accent)" : "var(--text-dim)";
-                  e.currentTarget.style.opacity = notifyTelegramEnabled ? "1" : "0.55";
-                }}
-              >
-                {/* Paper-plane icon; filled (accent) when enabled. */}
-                <svg width="13" height="13" viewBox="0 0 24 24" fill={notifyTelegramEnabled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            )}
+            {extraControls}
             {isMobile && controlsMenuOpen && (
               <button
                 type="button"

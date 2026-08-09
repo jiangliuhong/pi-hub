@@ -17,6 +17,7 @@
 
 import { randomUUID } from "crypto";
 
+import { classifyGrammyError } from "./telegram-bot-client";
 import { TelegramError, TelegramErrorCode } from "./errors";
 import { getDbPath, getDbPathDisplay, ensureHubHome } from "./telegram-paths";
 import { resolveToken, isTokenManagedByEnv, type TelegramTokenSource } from "./telegram-secret-store";
@@ -110,7 +111,6 @@ interface RuntimeInternals {
 }
 
 declare global {
-  // eslint-disable-next-line no-var
   var __piHubTelegramRuntime: TelegramRuntime | undefined;
 }
 
@@ -657,7 +657,6 @@ function classify(error: unknown): { code: string; message: string } {
     return { code: error.code, message: error.message };
   }
   // Defer to the bot-client classifier; token scrubbing happens there.
-  const { classifyGrammyError } = require("./telegram-bot-client") as typeof import("./telegram-bot-client");
   const e = classifyGrammyError(error, "");
   return { code: e.code, message: e.message };
 }
@@ -704,7 +703,6 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
           store,
           settings: () => runtime.getSettings() ?? ({} as never),
           reply: async (chatId, threadId, text, opts) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const bot = (runtime as unknown as { inner: RuntimeInternals | null }).inner?.bot;
             if (!bot) return;
             try {
@@ -730,7 +728,6 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
             }
           },
           answerCallback: async (callbackQueryId, text, showAlert) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const bot = (runtime as unknown as { inner: RuntimeInternals | null }).inner?.bot;
             if (!bot) return;
             try {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJiti } from "jiti";
@@ -10,7 +10,6 @@ const {
   resolveLocalFile,
   buildHttpFileUrl,
   shouldFetchOverHttp,
-  DEFAULT_MAX_ATTACHMENT_BYTES,
 } = await jiti.import("./telegram-files.ts");
 const {
   generatePairingCode,
@@ -33,7 +32,7 @@ test("resolveLocalFile: returns realpath + size for a contained file", () => {
     writeFileSync(file, Buffer.from("hello"));
     const r = resolveLocalFile(file, dir);
     assert.equal(r.size, 5);
-    assert.ok(r.path.startsWith(dir));
+    assert.ok(r.path.startsWith(realpathSync(dir)));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

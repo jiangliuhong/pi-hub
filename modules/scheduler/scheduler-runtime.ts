@@ -33,6 +33,32 @@ const TICK_MS = 10_000; // scan frequency
 const HEARTBEAT_TIMEOUT_MS = 90_000; // stale-run cutoff (3 missed heartbeats)
 const MAX_CONCURRENCY = 1;
 
+/**
+ * Dispatches at most the currently available number of queued runs.
+ * Kept outside the runtime class so the global concurrency invariant can be
+ * tested without starting timers or opening the scheduler database.
+ */
+export function dispatchQueuedRuns(
+  store: Pick<TaskStore, "listRuns" | "getRun">,
+  activeCount: number,
+  start: (run: TaskRun) => void,
+  maxConcurrency = MAX_CONCURRENCY,
+): number {
+  const slots = Math.max(0, maxConcurrency - activeCount);
+  if (slots === 0) return 0;
+
+  let dispatched = 0;
+  const queued = store.listRuns({ status: "queued", limit: slots });
+  for (const summary of queued) {
+    if (dispatched >= slots) break;
+    const run = store.getRun(summary.id);
+    if (!run || run.status !== "queued") continue;
+    start(run);
+    dispatched++;
+  }
+  return dispatched;
+}
+
 /** Short retry interval when a resume run finds its target session open in the
  *  browser (resume §9). Fixed — not user-configurable — because this is the
  *  resume safety net, not an opt-in policy. The user just needs a window to
@@ -305,12 +331,11 @@ export class SchedulerRuntime {
     if (!inner.leader) return; // only the leader scans/executes
 
     try {
-      // Also process any queued runs (e.g. manual triggers) up to concurrency.
+      // Both scheduled claims and manual triggers enter the same persisted
+      // queue. Dispatch only after scanning so every execution path observes
+      // the same global concurrency limit.
+      const { skipped } = scanOnce(inner.store, Date.now());
       this.drainQueued(inner);
-      const { claimed, skipped } = scanOnce(inner.store, Date.now());
-      for (const run of claimed) {
-        void this.execute(inner, run);
-      }
       if (skipped.length) {
         console.debug(
           `[pi-hub:scheduler] skipped ${skipped.length} run(s) this tick`,
@@ -326,15 +351,12 @@ export class SchedulerRuntime {
 
   /** Picks queued runs off the store (manual triggers land there) and runs them. */
   private drainQueued(inner: RuntimeInternals): void {
-    if (inner.active.size >= MAX_CONCURRENCY) return;
-    const queued = inner.store.listRuns({ status: "queued", limit: MAX_CONCURRENCY });
-    for (const q of queued) {
-      if (inner.active.size >= MAX_CONCURRENCY) break;
-      const full = inner.store.getRun(q.id);
-      if (full && full.status === "queued") {
-        void this.execute(inner, full);
-      }
-    }
+    if (inner.stopped || !inner.leader) return;
+    dispatchQueuedRuns(
+      inner.store,
+      inner.active.size,
+      (run) => { void this.execute(inner, run); },
+    );
   }
 
   private async execute(inner: RuntimeInternals, run: TaskRun): Promise<void> {
@@ -433,6 +455,9 @@ export class SchedulerRuntime {
       });
     } finally {
       inner.active.delete(run.id);
+      // Continue draining immediately instead of leaving the next persisted
+      // run waiting for the 10-second scanner interval.
+      this.drainQueued(inner);
     }
   }
 

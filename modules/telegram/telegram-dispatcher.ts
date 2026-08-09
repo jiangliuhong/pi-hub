@@ -14,7 +14,6 @@
 import type { TelegramStore } from "./telegram-store";
 import type { RuntimeDeps, UpdateHandler } from "./telegram-runtime";
 import type { TelegramSettings, TelegramUser } from "./types";
-import { TelegramErrorCode } from "./errors";
 import {
   authorize,
   PRE_AUTH_COMMANDS,

@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, chmodSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);

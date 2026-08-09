@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { TelegramRole } from "@/modules/telegram";
 import {
   getStoreOrError,
   telegramErrorResponse,
@@ -21,14 +20,6 @@ export async function GET() {
   } catch (error) {
     return telegramErrorResponse(error);
   }
-}
-
-const VALID_ROLES = new Set<TelegramRole>(["owner", "operator", "viewer"]);
-
-interface PatchAllBody {
-  role?: unknown;
-  enabled?: unknown;
-  displayName?: unknown;
 }
 
 /**

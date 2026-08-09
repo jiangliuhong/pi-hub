@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJiti } from "jiti";
@@ -13,8 +13,6 @@ function makeStore() {
   const store = SqliteTelegramStore.open(join(dir, "app.db"));
   return { store, dir };
 }
-
-const code = (c) => (err) => err && err.code === c;
 
 // ---------------------------------------------------------------------------
 // Settings + bot api server columns

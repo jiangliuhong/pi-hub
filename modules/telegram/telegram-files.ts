@@ -80,7 +80,6 @@ export function resolveLocalFile(
     );
   }
 
-  const realRootWithSlash = root.endsWith("/") ? root : root + "/";
   // realpathSync on the root itself too, in case the root is itself a symlink.
   let realRoot = root;
   try {

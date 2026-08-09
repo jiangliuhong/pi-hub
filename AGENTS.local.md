@@ -10,6 +10,27 @@ The primary engineering goal is:
 
 Pi Hub must remain easy to synchronize with upstream `pi-web` releases with minimal merge conflicts.
 
+## Approved Product-Level Differences
+
+The following differences are intentional parts of the Pi Hub product identity
+and are not upstream-compatibility regressions:
+
+- the npm package is published as `@jarome/pi-hub`;
+- the supported CLI command is `pi-hub` (additional commands may be added later);
+- Pi Hub uses port `30142` for `dev`, `start`, and their LAN variants;
+- release and publishing automation belongs to Pi Hub and must keep the Pi Hub
+  package identity;
+- user-facing product metadata and installation documentation may use the
+  Pi Hub name and repository URLs.
+
+These exceptions do not permit unrelated rewrites of upstream runtime, Chat,
+Session, API, or UI behavior. Keep product branding changes mechanical and
+localized. For local development, the Pi Hub quick start is:
+
+```bash
+npm run dev   # port 30142
+```
+
 ---
 
 ## 1. Upstream Compatibility

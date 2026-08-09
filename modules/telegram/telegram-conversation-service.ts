@@ -42,7 +42,7 @@ export class TelegramConversationService {
    * prompt runner creates/resumes one. Throws if the conversation is busy.
    */
   ensure(input: EnsureConversationInput): TelegramConversation {
-    let conv = this.store.getConversation(input.chatId, input.threadId);
+    const conv = this.store.getConversation(input.chatId, input.threadId);
     if (conv) {
       if (conv.state !== "idle" && conv.state !== "detached") {
         throw new ConversationBusyError(input.chatId, input.threadId, conv.state);

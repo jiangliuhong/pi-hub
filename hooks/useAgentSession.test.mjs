@@ -51,9 +51,9 @@ test("keeps the session event stream open through the idle grace window", () => 
   assert.match(sendSource, /if \(promptRequestStarted && sentSessionId\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?closeEvents\(\)/);
 });
 
-test("gates Telegram completion notifications on Web-owned runId matching", () => {
-  // A shared AgentSession emits prompt_done/prompt_error for Telegram, scheduler,
-  // and api runs too. The Web completion-notification path must only fire for an
+test("gates prompt-finished callbacks on Web-owned runId matching", () => {
+  // A shared AgentSession emits prompt_done/prompt_error for runs from multiple
+  // sources. The Web completion callback must only fire for an
   // event whose runSource === "web" AND whose runId matches the run this page
   // actually started (activeWebRunIdRef). Regression guard for the duplicate-
   // notification fix.

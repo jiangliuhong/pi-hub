@@ -1,9 +1,13 @@
 # Pi Web - Development Notes
 
+> **Pi Hub fork instructions:** Before making any code or architectural change,
+> read `AGENTS.local.md` completely. Both files apply. For Pi Hub-specific
+> development, `AGENTS.local.md` takes precedence.
+
 ## Quick Start
 
 ```bash
-npm run dev   # port 30142
+npm run dev   # port 30141
 ```
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
