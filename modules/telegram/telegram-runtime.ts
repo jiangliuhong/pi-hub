@@ -40,6 +40,20 @@ const LEASE_NAME = "telegram-bot";
 const LEASE_MS = 15_000; // lease validity
 const LEASE_RENEW_MS = 5_000; // renewal cadence
 
+// Auto-recovery backoff for transient errors (409 conflict, network, TLS).
+// Mirrors the outbox formula: base * 2^attempt, capped at MAX.
+const RECOVERY_BASE_BACKOFF_MS = 4_000; // first retry ~4s after failure
+const RECOVERY_MAX_BACKOFF_MS = 5 * 60_000; // cap at 5 minutes
+
+// Error codes worth auto-retrying. Config errors (invalid/missing token,
+// env-managed, validation) are excluded — retrying them is pointless.
+const RECOVERABLE_ERROR_CODES = new Set<string>([
+  TelegramErrorCode.TELEGRAM_TOKEN_IN_USE, // 409 conflict (core case)
+  TelegramErrorCode.TELEGRAM_API_ROOT_UNREACHABLE, // transient network
+  TelegramErrorCode.TELEGRAM_TLS_ERROR, // transient TLS
+  TelegramErrorCode.TELEGRAM_SEND_FAILED, // fallback send/network failure
+]);
+
 export interface UpdateHandler {
   /** Called for each Telegram update; must never throw. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,6 +102,11 @@ interface RuntimeInternals {
   stopping: boolean;
   /** Whether bot.start() has resolved (it normally never does). */
   polling: boolean;
+  // Auto-recovery bookkeeping. recoveryAttempt=0 means not in a recovery cycle.
+  recoveryAttempt: number;
+  nextRecoveryAt: number | null;
+  /** Token that was last successfully applied — used to detect external changes. */
+  lastAppliedToken: string;
 }
 
 declare global {
@@ -155,6 +174,9 @@ export class TelegramRuntime {
       errorAt: null,
       stopping: false,
       polling: false,
+      recoveryAttempt: 0,
+      nextRecoveryAt: null,
+      lastAppliedToken: resolved.token,
     };
     this.inner = inner;
 
@@ -254,6 +276,12 @@ export class TelegramRuntime {
     inner.outbox = null;
     inner.polling = false;
 
+    // restart() is driven by explicit user action (token/config change) —
+    // treat it as a fresh attempt and clear any pending recovery backoff so
+    // the new configuration isn't penalised for prior transient failures.
+    inner.recoveryAttempt = 0;
+    inner.nextRecoveryAt = null;
+
     if (!settings.enabled) {
       this.setRuntimeStatus("disabled", null, null);
       console.info(
@@ -299,6 +327,8 @@ export class TelegramRuntime {
         error: inner.error,
         errorCode: inner.errorCode,
         errorAt: inner.errorAt,
+        recoveryAttempt: inner.recoveryAttempt,
+        nextRecoveryAt: inner.nextRecoveryAt,
       },
       settings: inner.settings,
     };
@@ -349,6 +379,46 @@ export class TelegramRuntime {
       // process held it) and later acquired it via renewal.
       console.info("[pi-hub:telegram] acquired leader lease, starting polling");
       void this.tryStartPolling(false);
+      return;
+    }
+
+    // (A) Detect external token changes (secrets.json rewritten by another
+    // process, or env var changed before this process saw it). Triggers an
+    // immediate restart so a bot switch takes effect within ~5s with no
+    // manual action. Only meaningful for the leader — standby instances will
+    // pick up the new token when they next win the lease.
+    if (inner.leader) {
+      const latest = resolveToken();
+      if (
+        latest.token !== inner.lastAppliedToken ||
+        latest.source !== inner.tokenSource
+      ) {
+        console.info("[pi-hub:telegram] token changed externally, restarting");
+        void this.restart();
+        return;
+      }
+    }
+
+    // (B) Auto-recover from transient errors (409 conflict, network, TLS).
+    // Polling is already stopped when we land here (the bot.start() catch set
+    // status=error), so retrying is safe. Clear nextRecoveryAt before firing
+    // so the next tick can't re-enter while tryStartPolling is still in its
+    // async prologue (before inner.polling flips to true); the catch paths
+    // re-schedule via scheduleRecoveryIfRecoverable, markRunning clears it.
+    if (
+      inner.leader &&
+      inner.status === "error" &&
+      inner.errorCode &&
+      RECOVERABLE_ERROR_CODES.has(inner.errorCode) &&
+      inner.nextRecoveryAt !== null &&
+      Date.now() >= inner.nextRecoveryAt &&
+      !inner.polling
+    ) {
+      console.info(
+        `[pi-hub:telegram] auto-recovery attempt ${inner.recoveryAttempt + 1} for ${inner.errorCode}`,
+      );
+      inner.nextRecoveryAt = null;
+      void this.tryStartPolling(false);
     }
   }
 
@@ -370,6 +440,41 @@ export class TelegramRuntime {
     if (changing && (error || errorCode)) {
       console.warn(`[pi-hub:telegram] status=${status} code=${errorCode} error=${error}`);
     }
+  }
+
+  /**
+   * Called whenever polling successfully reaches the running state — clears any
+   * pending recovery backoff and remembers the token that's now in effect so
+   * external token changes can be detected.
+   */
+  private markRunning(inner: RuntimeInternals): void {
+    inner.recoveryAttempt = 0;
+    inner.nextRecoveryAt = null;
+    inner.lastAppliedToken = inner.token;
+  }
+
+  /**
+   * After a polling/getMe failure, schedules an auto-recovery retry if the
+   * error code is transient (409 conflict, network, TLS). Non-recoverable
+   * config errors (invalid token, validation, etc.) leave the runtime parked
+   * in `error` for the user to fix.
+   */
+  private scheduleRecoveryIfRecoverable(
+    inner: RuntimeInternals,
+    errorCode: string,
+  ): void {
+    if (!RECOVERABLE_ERROR_CODES.has(errorCode)) {
+      // Stop any pending recovery cycle if we land on a non-recoverable error.
+      inner.recoveryAttempt = 0;
+      inner.nextRecoveryAt = null;
+      return;
+    }
+    inner.recoveryAttempt += 1;
+    const backoff = Math.min(
+      RECOVERY_BASE_BACKOFF_MS * 2 ** (inner.recoveryAttempt - 1),
+      RECOVERY_MAX_BACKOFF_MS,
+    );
+    inner.nextRecoveryAt = Date.now() + backoff;
   }
 
   private async tryStartPolling(skipPolling: boolean): Promise<void> {
@@ -395,11 +500,13 @@ export class TelegramRuntime {
     try {
       bot = createBot({ token: inner.token, apiRoot });
     } catch (error) {
+      const code = error instanceof TelegramError ? error.code : TelegramErrorCode.VALIDATION_ERROR;
       this.setRuntimeStatus(
         "error",
-        error instanceof TelegramError ? error.code : TelegramErrorCode.VALIDATION_ERROR,
+        code,
         error instanceof Error ? error.message : String(error),
       );
+      this.scheduleRecoveryIfRecoverable(inner, code);
       return;
     }
     inner.bot = bot;
@@ -443,6 +550,7 @@ export class TelegramRuntime {
     } catch (error) {
       const classified = classify(error);
       this.setRuntimeStatus("error", classified.code, classified.message);
+      this.scheduleRecoveryIfRecoverable(inner, classified.code);
       console.warn(
         `[pi-hub:telegram] getMe failed against ${apiRoot} (token=${maskToken(
           inner.token,
@@ -482,12 +590,14 @@ export class TelegramRuntime {
 
     if (skipPolling) {
       this.setRuntimeStatus("running", null, null);
+      this.markRunning(inner);
       return;
     }
 
     // Start long polling (never resolves unless stopped). drop_pending_updates
     // is honored (§7.5) — old queued commands won't fire on restart.
     this.setRuntimeStatus("running", null, null);
+    this.markRunning(inner);
     bot
       .start({
         drop_pending_updates: inner.settings.dropPendingUpdates,
@@ -509,6 +619,7 @@ export class TelegramRuntime {
         if (inner.stopping) return; // expected during stop()
         const classified = classify(error);
         this.setRuntimeStatus("error", classified.code, classified.message);
+        this.scheduleRecoveryIfRecoverable(inner, classified.code);
         console.warn(
           `[pi-hub:telegram] polling stopped: ${classified.message}`,
         );
@@ -535,6 +646,8 @@ function emptyRuntimeInfo(): TelegramRuntimeInfo {
     error: null,
     errorCode: null,
     errorAt: null,
+    recoveryAttempt: 0,
+    nextRecoveryAt: null,
   };
 }
 

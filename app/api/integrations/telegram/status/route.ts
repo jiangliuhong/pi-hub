@@ -42,6 +42,8 @@ export async function GET() {
             error: null,
             errorCode: null,
             errorAt: null,
+            recoveryAttempt: 0,
+            nextRecoveryAt: null,
           },
           settings: null,
         },

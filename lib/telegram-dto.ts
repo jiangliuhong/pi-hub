@@ -88,6 +88,8 @@ export interface TelegramStatusDto {
     error: string | null;
     errorCode: string | null;
     errorAt: string | null;
+    recoveryAttempt: number;
+    nextRecoveryAt: string | null;
   };
   userCount: number;
   conversationCount: number;
@@ -121,6 +123,8 @@ export function statusToDto(args: {
       error: r.error,
       errorCode: r.errorCode,
       errorAt: iso(r.errorAt),
+      recoveryAttempt: r.recoveryAttempt,
+      nextRecoveryAt: iso(r.nextRecoveryAt),
     },
     userCount,
     conversationCount,

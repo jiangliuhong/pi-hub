@@ -242,4 +242,8 @@ export interface TelegramRuntimeInfo {
   error: string | null;
   errorCode: string | null;
   errorAt: number | null;
+  /** Current auto-recovery attempt count (0 = not recovering). */
+  recoveryAttempt: number;
+  /** Next scheduled auto-recovery retry timestamp, or null if none pending. */
+  nextRecoveryAt: number | null;
 }
