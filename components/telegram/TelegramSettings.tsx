@@ -314,6 +314,43 @@ function Banner({ kind, children }: { kind: "error" | "success" | "warn"; childr
   );
 }
 
+/**
+ * RecoveryCountdown — shown inside the error Banner when the backend has
+ * scheduled an auto-recovery retry (nextRecoveryAt !== null). Driven by a
+ * local 1s tick so the countdown stays smooth regardless of the 5s status
+ * polling cadence. The data source of truth is the backend: it only sets
+ * nextRecoveryAt for transient errors (409/network/TLS), so we don't need to
+ * re-classify the error code here.
+ */
+function RecoveryCountdown({
+  nextRecoveryAt,
+  recoveryAttempt,
+}: {
+  nextRecoveryAt: string;
+  recoveryAttempt: number;
+}) {
+  const target = new Date(nextRecoveryAt).getTime();
+  const [remaining, setRemaining] = useState(() => Math.max(0, Math.round((target - Date.now()) / 1000)));
+  useEffect(() => {
+    setRemaining(Math.max(0, Math.round((target - Date.now()) / 1000)));
+    const id = setInterval(() => {
+      setRemaining(Math.max(0, Math.round((target - Date.now()) / 1000)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [target]);
+
+  // Backoff caps at 5min from attempt 8 onward (4000 * 2^7 = 512000 > 300000).
+  const capped = recoveryAttempt >= 8;
+  return (
+    <div style={{ marginTop: 6, color: "#d97706" }}>
+      {remaining > 0
+        ? `自动恢复中（第 ${recoveryAttempt} 次重试），将在 ${remaining}s 后重试…`
+        : `自动恢复中（第 ${recoveryAttempt} 次重试），正在重试…`}
+      {capped && <div style={{ marginTop: 2 }}>已退避到上限，每 5 分钟重试一次。</div>}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Setup tab: token, status, bot api server, test, pairing
 // ---------------------------------------------------------------------------
@@ -499,6 +536,12 @@ function SetupTab(props: {
           <Banner kind="error">
             {status.runtime.errorCode}
             {status.runtime.error ? `：${status.runtime.error}` : ""}
+            {status.runtime.nextRecoveryAt && (
+              <RecoveryCountdown
+                nextRecoveryAt={status.runtime.nextRecoveryAt}
+                recoveryAttempt={status.runtime.recoveryAttempt}
+              />
+            )}
             <div style={{ marginTop: 6 }}>
               <button style={secondaryButtonStyle(busy)} onClick={doRestart} disabled={busy}>
                 重新启动
