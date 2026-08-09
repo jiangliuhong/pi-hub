@@ -145,3 +145,25 @@ test("external abort signal cancels the run", async () => {
   assert.equal(result.error, "Cancelled");
   assert.ok(session.sent.some((c) => c.type === "abort"));
 });
+
+test("forwards runMeta onto the prompt command so terminal events are source-tagged", async () => {
+  const session = makeFakeSession();
+  const promise = runPromptAndWait(session, "hi", 5000, {
+    runMeta: { runId: "task-run-42", source: "scheduler" },
+  });
+  await Promise.resolve();
+  session.emit({ type: "prompt_done" });
+  await promise;
+  const promptCmd = session.sent.find((c) => c.type === "prompt");
+  assert.deepEqual(promptCmd.runMeta, { runId: "task-run-42", source: "scheduler" });
+});
+
+test("omits runMeta when not provided (legacy callers)", async () => {
+  const session = makeFakeSession();
+  const promise = runPromptAndWait(session, "hi", 5000);
+  await Promise.resolve();
+  session.emit({ type: "prompt_done" });
+  await promise;
+  const promptCmd = session.sent.find((c) => c.type === "prompt");
+  assert.equal("runMeta" in promptCmd, false);
+});

@@ -51,6 +51,29 @@ test("keeps the session event stream open through the idle grace window", () => 
   assert.match(sendSource, /if \(promptRequestStarted && sentSessionId\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?closeEvents\(\)/);
 });
 
+test("gates Telegram completion notifications on Web-owned runId matching", () => {
+  // A shared AgentSession emits prompt_done/prompt_error for Telegram, scheduler,
+  // and api runs too. The Web completion-notification path must only fire for an
+  // event whose runSource === "web" AND whose runId matches the run this page
+  // actually started (activeWebRunIdRef). Regression guard for the duplicate-
+  // notification fix.
+  const fireSource = source.slice(
+    source.indexOf("const firePromptFinished"),
+    source.indexOf("const scheduleEventStreamClose"),
+  );
+  const sendSource = source.slice(
+    source.indexOf("  const handleSend = useCallback"),
+    source.indexOf("  const executeBash = useCallback"),
+  );
+  assert.match(fireSource, /eventRunSource !== "web"/);
+  assert.match(fireSource, /activeWebRunIdRef\.current !== eventRunId/);
+  assert.match(fireSource, /notifiedWebRunIdsRef\.current\.has\(eventRunId\)/);
+
+  // The prompt command must carry runMeta so the wrapper can tag the terminal
+  // event with the originating source.
+  assert.match(sendSource, /runMeta: \{ runId, source: "web" \}/);
+});
+
 test("reuses an open event stream and hides an empty agent phase", () => {
   const ensureSource = source.slice(
     source.indexOf("const ensureEventsConnected"),

@@ -151,14 +151,16 @@ export interface UseAgentSessionOptions {
   onSessionStatsPanelOpen?: () => void;
   setToolPreset?: (preset: "none" | "default" | "full") => void;
   /**
-   * Fires once per prompt run when it reaches a terminal state (success via
-   * `prompt_done`, or failure via `prompt_error`). Used by the chat layer to
-   * dispatch external notifications (e.g. Telegram). The first terminal event
-   * for a given run wins, so retries that eventually succeed do not
-   * double-fire.
+   * Fires once per Web-originated prompt run when it reaches a terminal state
+   * (success via `prompt_done`, or failure via `prompt_error`). Used by the
+   * chat layer to dispatch external notifications (e.g. Telegram). Only runs
+   * whose terminal event carries a `runId` we issued ourselves fire this — a
+   * Telegram/scheduler/API run sharing the same session never triggers a Web
+   * completion notification.
    */
   onPromptFinished?: (info: {
-    runId: number;
+    /** Stable run id (UUID) generated at send time. */
+    runId: string;
     status: "success" | "failed";
     sessionId: string | null;
     userPrompt: string | null;
@@ -435,8 +437,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const currentRunPromptRef = useRef<string | null>(null);
   /** Epoch ms when the in-flight run started. */
   const currentRunStartedAtRef = useRef<number | null>(null);
-  /** Run id already surfaced via onPromptFinished (once-per-run guard). */
-  const notifiedRunFinishedRef = useRef(-1);
+  /**
+   * The stable runId of the Web-originated prompt currently in flight, plus
+   * the set of runIds already notified. Shared AgentSessions emit terminal
+   * events for Telegram/scheduler runs too; only an event whose runId matches
+   * a Web run we started is allowed to trigger a Web completion notification.
+   */
+  const activeWebRunIdRef = useRef<string | null>(null);
+  const notifiedWebRunIdsRef = useRef<Set<string>>(new Set());
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
@@ -876,17 +884,34 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [onAgentEnd]);
 
   /**
-   * Surfaces a run's terminal outcome once (for external notifications). The
-   * first terminal event for a run id wins, so an error followed by an
-   * auto-retry success does not fire twice. The prompt text/start-time come
-   * from refs captured at send time.
+   * Surfaces a Web-owned run's terminal outcome once, keyed on the stable
+   * `runId` we issued at send time. The first terminal event for a run wins,
+   * so an error followed by a trailing `prompt_done` does not fire twice.
+   *
+   * Returns true when the notification was actually dispatched (i.e. this was
+   * a Web-owned run that had not already been notified), false otherwise —
+   * callers use that to decide whether to consume the run as "ours".
    */
   const firePromptFinished = useCallback(
-    (runId: number, status: "success" | "failed", errorMessage?: string | null) => {
-      if (notifiedRunFinishedRef.current === runId) return;
-      notifiedRunFinishedRef.current = runId;
+    (
+      eventRunId: string | undefined,
+      eventRunSource: string | undefined,
+      status: "success" | "failed",
+      errorMessage?: string | null,
+    ): boolean => {
+      // Only Web-owned runs may trigger a Web completion notification. A
+      // terminal event without a runId (legacy/extension runs) or from another
+      // surface (telegram/scheduler/api) must refresh state but not notify.
+      if (eventRunSource !== "web" || typeof eventRunId !== "string" || !eventRunId) {
+        return false;
+      }
+      // The runId must match a run this page actually started. This covers
+      // session switches, late events from a previous run, and SSE replays.
+      if (activeWebRunIdRef.current !== eventRunId) return false;
+      if (notifiedWebRunIdsRef.current.has(eventRunId)) return false;
+      notifiedWebRunIdsRef.current.add(eventRunId);
       onPromptFinished?.({
-        runId,
+        runId: eventRunId,
         status,
         sessionId: sessionIdRef.current,
         userPrompt: currentRunPromptRef.current,
@@ -894,6 +919,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         finishedAt: Date.now(),
         errorMessage,
       });
+      return true;
     },
     [onPromptFinished],
   );
@@ -972,12 +998,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const wasRunning = settleUiStage();
       if (promptWasPending) {
         notifyPromptStage(runId);
+        // Reconciliation path: the terminal SSE event was missed (network
+        // drop, backgrounded tab), so we settled by polling. If this page
+        // still owns an in-flight Web run, surface its completion now —
+        // otherwise the run would never notify. Status defaults to "success"
+        // because the server reported idle with no error path observed; a
+        // prompt_error that did arrive would already have cleared the active
+        // runId via the prompt_error handler, so this can't double-notify.
+        const activeWebRunId = activeWebRunIdRef.current;
+        if (activeWebRunId) {
+          const notified = firePromptFinished(activeWebRunId, "web", "success");
+          if (notified) activeWebRunIdRef.current = null;
+        }
       } else if (agentWasActive && wasRunning) {
         onAgentEnd?.();
       }
       if (sid) scheduleEventStreamClose(sid);
     }
-  }, [loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, settleUiStage]);
+  }, [firePromptFinished, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, settleUiStage]);
 
   const waitForPromptSettlement = useCallback(async (sid: string, runId?: number) => {
     await delay(PROMPT_SETTLE_INITIAL_DELAY_MS);
@@ -1151,7 +1189,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           rpcPromptPendingRef.current = false;
           optimisticUserMessageKeyRef.current = null;
           const firstNotification = notifyPromptStage(runId);
-          firePromptFinished(runId, "success");
+          const eventRunId = event.runId as string | undefined;
+          const eventRunSource = event.runSource as string | undefined;
+          const notified = firePromptFinished(eventRunId, eventRunSource, "success");
+          if (notified) {
+            // This terminal event belonged to our Web run; clear the active
+            // runId so a late duplicate cannot re-notify.
+            activeWebRunIdRef.current = null;
+          }
           if (!promptWasPending && !firstNotification) break;
 
           const sid = sessionIdRef.current;
@@ -1166,8 +1211,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         break;
       case "prompt_error":
-        firePromptFinished(promptRunIdRef.current, "failed", (event.errorMessage as string | undefined) ?? "Command failed");
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+        {
+          const eventRunId = event.runId as string | undefined;
+          const eventRunSource = event.runSource as string | undefined;
+          const notified = firePromptFinished(
+            eventRunId,
+            eventRunSource,
+            "failed",
+            (event.errorMessage as string | undefined) ?? "Command failed",
+          );
+          if (notified) activeWebRunIdRef.current = null;
+          addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+        }
         break;
       case "extension_error":
         addNotice({
@@ -1304,8 +1359,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
 
     const promptRunId = promptRunIdRef.current + 1;
+    // Stable identifier for this Web-originated run. Echoed back on the
+    // terminal event via runMeta so we can correlate it (and so non-Web runs
+    // sharing this session never trigger a Web completion notification).
+    const runId = createNoticeId();
     cancelEventStreamGrace();
     rpcPromptPendingRef.current = true;
+    activeWebRunIdRef.current = runId;
 
     const imageBlocks = images?.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mimeType, data: img.data } }));
     const userMsg: AgentMessage = {
@@ -1320,7 +1380,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     promptRunIdRef.current = promptRunId;
     currentRunPromptRef.current = trimmedMessage || null;
     currentRunStartedAtRef.current = Date.now();
-    notifiedRunFinishedRef.current = promptRunId - 1;
     agentRunningRef.current = true;
     setAgentRunning(true);
     setAgentPhase(isSlashCommandPrompt ? { kind: "running_command" } : { kind: "waiting_model" });
@@ -1353,6 +1412,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             type: "prompt",
             message,
             ...(piImages?.length ? { images: piImages } : {}),
+            runMeta: { runId, source: "web" },
           });
           promoteNewSession(1, message);
         }
@@ -1364,6 +1424,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           type: "prompt",
           message,
           ...(piImages?.length ? { images: piImages } : {}),
+          runMeta: { runId, source: "web" },
         });
       }
       if (isSlashCommandPrompt && sentSessionId) {
@@ -1378,6 +1439,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void waitForPromptSettlement(sentSessionId, promptRunId);
         return;
       }
+      // The prompt never reached the agent — no terminal event will arrive, so
+      // drop the active Web run so it can't match a stray later event.
+      activeWebRunIdRef.current = null;
       rpcPromptPendingRef.current = false;
       agentRunningRef.current = false;
       closeEvents();

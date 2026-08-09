@@ -235,8 +235,17 @@ export class TelegramPromptRunner {
     });
 
     // 6. Send the prompt (fire-and-forget; completion arrives via events).
+    // Attach runMeta so the synthesized terminal events are tagged with the
+    // Telegram business source — this prevents a Web page subscribed to the
+    // same session from mis-routing a Telegram run into a Web completion
+    // notification (design §5/§6).
     try {
-      await session.send({ type: "prompt", message: input.text, source: "rpc" });
+      await session.send({
+        type: "prompt",
+        message: input.text,
+        source: "rpc",
+        runMeta: { runId, source: "telegram" },
+      });
     } catch (error) {
       this.cleanup(input.chatId, input.threadId, runId, realSessionId);
       await renderer.finalize(errMsg(error));

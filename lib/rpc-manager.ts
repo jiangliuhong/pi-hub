@@ -7,6 +7,7 @@ import { resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
+import { readRunMeta, type PromptRunMeta } from "./prompt-run-meta";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { getConfiguredSessionDir } from "./session-dir";
@@ -81,6 +82,29 @@ const IDLE_RESET_EVENT_TYPES = new Set([
   "auto_compaction_end",
   "compaction_end",
 ]);
+
+/**
+ * Builds a synthesized terminal event (`prompt_done` / `prompt_error`) carrying
+ * the originating run's `runId` + `runSource` when available. Legacy callers
+ * (or extension-injected runs) that supply no `runMeta` still get a terminal
+ * event, but without the correlation fields — downstream consumers must treat
+ * those as ineligible for external completion notifications.
+ */
+function terminalEvent(
+  type: "prompt_done" | "prompt_error",
+  runMeta: PromptRunMeta | null,
+  errorMessage?: string,
+): AgentEvent {
+  const event: AgentEvent = { type };
+  if (runMeta) {
+    event.runId = runMeta.runId;
+    event.runSource = runMeta.source;
+  }
+  if (type === "prompt_error" && errorMessage !== undefined) {
+    event.errorMessage = errorMessage;
+  }
+  return event;
+}
 
 export interface RpcSessionStartOptions {
   toolNames?: string[];
@@ -355,6 +379,11 @@ export class AgentSessionWrapper {
         // Fire and forget — events come via subscribe
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
+        // Capture the application-layer run metadata (if any) so the synthesized
+        // terminal events can be correlated back to the originating caller. This
+        // is what lets the Web completion-notification path distinguish a Web
+        // run from a Telegram/scheduler/API run sharing the same session.
+        const runMeta = readRunMeta(command);
         this.promptRunning = true;
         notifyRunningChange();
         this.inner.prompt(command.message as string, {
@@ -364,17 +393,18 @@ export class AgentSessionWrapper {
         }).then(() => {
           this.promptRunning = false;
           this.resetIdleTimer();
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
+          if (!streamingBehavior) this.emit(terminalEvent("prompt_done", runMeta));
           notifyRunningChange();
         }).catch((error) => {
           this.promptRunning = false;
           this.resetIdleTimer();
           invalidateSessionListCache();
-          this.emit({
-            type: "prompt_error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
+          this.emit(terminalEvent(
+            "prompt_error",
+            runMeta,
+            error instanceof Error ? error.message : String(error),
+          ));
+          if (!streamingBehavior) this.emit(terminalEvent("prompt_done", runMeta));
           notifyRunningChange();
         });
         return null;

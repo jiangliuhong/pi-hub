@@ -46,12 +46,20 @@ const INTERACTIVE_METHODS = new Set([
  * Sends a prompt and resolves only after the wrapper's `prompt_done` event.
  * Subscribes BEFORE sending (§30.2) so a fast-completing prompt cannot drop
  * its terminal event. Resolves exactly once regardless of races.
+ *
+ * `runMeta` is forwarded onto the `prompt` command so the synthesized terminal
+ * events are tagged with the scheduler business source — a Web page subscribed
+ * to the same session then cannot mis-route a scheduled run into a Web
+ * completion notification. When omitted, the run is treated as `api` source.
  */
 export function runPromptAndWait(
   session: WaiterSession,
   message: string,
   timeoutMs: number,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    runMeta?: { runId: string; source: "scheduler" | "api" };
+  } = {},
 ): Promise<WaitResult> {
   return new Promise<WaitResult>((resolve) => {
     let promptError: string | null = null;
@@ -133,7 +141,11 @@ export function runPromptAndWait(
 
     // Fire the prompt AFTER subscribing. send() itself returns immediately.
     session
-      .send({ type: "prompt", message })
+      .send({
+        type: "prompt",
+        message,
+        ...(options.runMeta ? { runMeta: options.runMeta } : {}),
+      })
       .catch((error) => {
         finish({
           ok: false,

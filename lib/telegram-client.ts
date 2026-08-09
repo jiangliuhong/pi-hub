@@ -184,10 +184,23 @@ export const migrateBotApiServer = (toApiRoot: string) =>
  * Fire-and-forget a Telegram notification for a completed Web (manual) Agent
  * run. The server enriches it with session metadata and enqueues into the
  * outbox. Never throws on the caller — returns a promise the chat layer can
- * ignore. Returns `{ notified: 0 }` when Telegram is not configured.
+ * ignore. Returns `{ notified: 0 }` when Telegram is not configured, and a
+ * `{ skipped: true, reason: "non_web_run" }` body for non-Web sources.
+ *
+ * `runId` is the stable run identifier generated at send time; the server
+ * dedupes the outbox on it.
  */
 export const notifyTelegramManualRun = (
-  body: { sessionId: string; status: "success" | "failed"; prompt?: string; errorMessage?: string; startedAt?: number; finishedAt?: number },
+  body: {
+    sessionId: string;
+    runId: string;
+    runSource: "web";
+    status: "success" | "failed";
+    prompt?: string;
+    errorMessage?: string;
+    startedAt?: number;
+    finishedAt: number;
+  },
 ) =>
   sendJson<{ ok: boolean; notified: number; reason?: string; skipped?: boolean }>(
     "POST",

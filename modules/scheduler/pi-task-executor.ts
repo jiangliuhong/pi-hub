@@ -251,13 +251,15 @@ export async function executeRun(
     }
 
     // 6. Prompt + wait. The waiter handles extension auto-cancel + timeout.
+    // Tag the run as scheduler-originated so a Web page sharing this session
+    // does not mis-route it into a Web completion notification (design §5/§9).
     const result = await runPromptAndWait(
       session as WaiterSession,
       resume
         ? buildResumePrompt(run.promptSnapshot)
         : buildPrompt(run.promptSnapshot),
       execution.timeoutSeconds * 1000,
-      { signal },
+      { signal, runMeta: { runId: run.id, source: "scheduler" } },
     );
 
     // 5. Capture result excerpt (best-effort).

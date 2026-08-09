@@ -199,11 +199,13 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   // integration must never disturb the chat. Reads the ref so toggling the
   // preference mid-run does not retroactively fire.
   const wrappedOnPromptFinished = useCallback(
-    (info: { status: "success" | "failed"; sessionId: string | null; userPrompt: string | null; startedAt: number | null; finishedAt: number; errorMessage?: string | null }) => {
+    (info: { runId: string; status: "success" | "failed"; sessionId: string | null; userPrompt: string | null; startedAt: number | null; finishedAt: number; errorMessage?: string | null }) => {
       if (!notifyEnabledRef.current) return;
       if (!info.sessionId) return;
       void notifyTelegramManualRun({
         sessionId: info.sessionId,
+        runId: info.runId,
+        runSource: "web",
         status: info.status,
         prompt: info.userPrompt ?? undefined,
         errorMessage: info.errorMessage ?? undefined,
