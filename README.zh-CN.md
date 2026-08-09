@@ -13,37 +13,39 @@ Pi Web 要求 Node.js 22.19.0 或更高版本。可通过 `node --version` 检�
 **无需安装，直接运行：**
 
 ```bash
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 **或全局安装后使用：**
 
 ```bash
-npm install -g @agegr/pi-web
-pi-web
+npm install -g @jarome/pi-hub
+pi-hub
 ```
 
-启动后打开 [http://127.0.0.1:30141](http://127.0.0.1:30141)。命令行版本会在服务就绪后尝试自动打开浏览器。Pi Web 默认仅监听 `127.0.0.1`。
+启动后打开 [http://127.0.0.1:30142](http://127.0.0.1:30142)。命令行版本会在服务就绪后尝试自动打开浏览器。Pi Web 默认仅监听 `127.0.0.1`。
 
 **可选参数：**
 
 ```bash
-pi-web --port 8080              # 自定义端口
-pi-web --hostname 0.0.0.0       # 在可信网络中开放访问
-pi-web -p 8080 -H 0.0.0.0       # 组合使用
-pi-web --no-open                # 不自动打开浏览器
+pi-hub --port 8080              # 自定义端口
+pi-hub --hostname 0.0.0.0       # 在可信网络中开放访问
+pi-hub -p 8080 -H 0.0.0.0       # 组合使用
+pi-hub --no-open                # 不自动打开浏览器
 
-PORT=8080 pi-web                # 也支持环境变量
-PI_WEB_HOSTNAME=0.0.0.0 pi-web  # 显式开放网络访问
-PI_WEB_ALLOWED_HOSTS=pi-web.internal pi-web  # 允许指定的代理或自定义主机名
-PI_WEB_PASSWORD='足够长的随机密码' pi-web  # 启用 Basic Auth（用户名固定为 pi）
-PI_WEB_NO_OPEN=1 pi-web         # 适用于后台服务或开机自启
+PORT=8080 pi-hub                # 也支持环境变量
+PI_HUB_HOSTNAME=0.0.0.0 pi-hub  # 显式开放网络访问
+PI_HUB_ALLOWED_HOSTS=pi-hub.internal pi-hub  # 允许指定的代理或自定义主机名
+PI_HUB_PASSWORD='足够长的随机密码' pi-hub  # 启用 Basic Auth（用户名固定为 pi）
+PI_HUB_NO_OPEN=1 pi-hub         # 适用于后台服务或开机自启
 ```
 
-设置 `PI_WEB_PASSWORD` 后，网页和所有 API 端点都会启用 HTTP Basic Auth，用户名固定为 `pi`。未设置或设置为空值时不启用认证。
+环境变量支持 `PI_HUB_`（推荐）和 `PI_WEB_`（兼容上游 pi-web 的旧名称）两种前缀。
+
+设置 `PI_HUB_PASSWORD` 后，网页和所有 API 端点都会启用 HTTP Basic Auth，用户名固定为 `pi`。未设置或设置为空值时不启用认证。
 
 Pi Web 可以调用高权限智能体。Basic Auth 不会加密传输中的密码，因此不要把明文 HTTP 暴露到互联网。远程访问时应使用可信反向代理提供 HTTPS，或通过可信 VPN 访问。
-API 请求仅接受 loopback 名称、IP 字面量、当前监听主机名，以及 `PI_WEB_ALLOWED_HOSTS` 中以逗号分隔的精确主机名。可信反向代理使用不同的外部主机名时，请配置该变量。
+API 请求仅接受 loopback 名称、IP 字面量、当前监听主机名，以及 `PI_HUB_ALLOWED_HOSTS` 中以逗号分隔的精确主机名。可信反向代理使用不同的外部主机名时，请配置该变量。
 
 ## HTTP 代理
 
@@ -55,7 +57,7 @@ macOS 或 Linux：
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 Windows PowerShell：
@@ -64,7 +66,7 @@ Windows PowerShell：
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 ## 功能介绍
@@ -92,7 +94,7 @@ npm install
 npm run dev
 ```
 
-本地开发端口为 [http://127.0.0.1:30141](http://127.0.0.1:30141)。
+本地开发端口为 [http://127.0.0.1:30142](http://127.0.0.1:30142)。
 
 常用检查：
 
@@ -146,6 +148,6 @@ hooks/
   useDragDrop.ts      # 图片拖拽
   useTheme.ts         # 主题切换
 bin/
-  pi-web.js           # npm CLI 入口
+  pi-hub.js           # npm CLI 入口
 instrumentation.ts    # 初始化服务端 HTTP dispatcher
 ```

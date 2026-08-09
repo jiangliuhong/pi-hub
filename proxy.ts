@@ -7,6 +7,7 @@ import {
   isValidBasicAuthorization,
   isWebPasswordEnabled,
 } from "@/lib/web-auth";
+import { piEnv } from "@/lib/env";
 
 export function proxy(request: NextRequest) {
   const isApiRequest = request.nextUrl.pathname === "/api"
@@ -22,7 +23,7 @@ export function proxy(request: NextRequest) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
 
-  const password = process.env.PI_WEB_PASSWORD;
+  const password = piEnv("PASSWORD");
   if (
     isWebPasswordEnabled(password)
     && !isValidBasicAuthorization(request.headers.get("authorization"), password)
@@ -31,7 +32,7 @@ export function proxy(request: NextRequest) {
       status: 401,
       headers: {
         "Cache-Control": "no-store",
-        "WWW-Authenticate": 'Basic realm="Pi Web", charset="UTF-8"',
+        "WWW-Authenticate": 'Basic realm="Pi Hub", charset="UTF-8"',
       },
     });
   }

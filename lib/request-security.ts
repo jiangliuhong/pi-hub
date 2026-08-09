@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { piEnv } from "@/lib/env";
 
 function normalizeHostname(value: string): string {
   const unbracketed = value.startsWith("[") && value.endsWith("]")
@@ -32,8 +33,8 @@ function isLoopbackHostname(hostname: string): boolean {
 
 function configuredHostnamesFromEnvironment(): string[] {
   return [
-    process.env.PI_WEB_HOSTNAME,
-    ...(process.env.PI_WEB_ALLOWED_HOSTS?.split(",") ?? []),
+    piEnv("HOSTNAME"),
+    ...(piEnv("ALLOWED_HOSTS")?.split(",") ?? []),
   ].filter((value): value is string => Boolean(value?.trim()));
 }
 

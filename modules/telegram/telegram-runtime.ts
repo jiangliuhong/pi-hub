@@ -586,7 +586,7 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
       };
       const handlerFactory: UpdateHandlerFactory = (store) => {
         const conversationService = new TelegramConversationService(store);
-        const runnerCache: { runner: TelegramPromptRunner | null } = { runner: null };
+        const runnerCache: { runner: InstanceType<typeof TelegramPromptRunner> | null } = { runner: null };
         return createDispatcher({
           store,
           settings: () => runtime.getSettings() ?? ({} as never),
@@ -681,6 +681,85 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
               });
             }
             return runnerCache.runner;
+          },
+          listAllSessions: async () => {
+            const { listAllSessions } = await import("@/lib/session-reader");
+            return listAllSessions();
+          },
+          getSessionState: async (sessionId) => {
+            const { getRpcSession } = await import("@/lib/rpc-manager");
+            const wrapper = getRpcSession(sessionId);
+            if (!wrapper?.isAlive()) return null;
+            try {
+              const state = (await wrapper.send({ type: "get_state" })) as {
+                model?: { id: string; provider: string };
+                thinkingLevel?: string;
+                messageCount?: number;
+                isCompacting?: boolean;
+                autoCompactionEnabled?: boolean;
+                contextUsage?: { percent: number; tokens: number; contextWindow: number } | null;
+              };
+              return {
+                model: state.model ?? null,
+                thinkingLevel: state.thinkingLevel ?? "off",
+                messageCount: state.messageCount ?? 0,
+                isCompacting: Boolean(state.isCompacting),
+                autoCompactionEnabled: Boolean(state.autoCompactionEnabled),
+                contextUsage: state.contextUsage ?? null,
+              };
+            } catch {
+              return null;
+            }
+          },
+          listModels: async (workspace) => {
+            const { loadModelsWithCache } = await import("@/lib/models-cache");
+            const data = await loadModelsWithCache(workspace, async () => {
+              const { createAgentSessionServices, getAgentDir } = await import(
+                "@earendil-works/pi-coding-agent"
+              );
+              const { resolveVisibleModels } = await import("@/lib/model-scope");
+              const { projectTrustReloadOptions } = await import("@/lib/project-trust");
+              const agentDir = getAgentDir();
+              // Gate untrusted project extensions the same way /api/models does
+              // (#236): enumerating models imports + runs a repo's .pi/extensions
+              // factories, so honor project trust here too.
+              const trustReloadOptions = projectTrustReloadOptions(workspace, agentDir);
+              const services = await createAgentSessionServices({
+                cwd: workspace,
+                agentDir,
+                ...(trustReloadOptions
+                  ? { resourceLoaderReloadOptions: trustReloadOptions }
+                  : {}),
+              });
+              const settings = services.settingsManager;
+              const scope = await resolveVisibleModels(
+                services.modelRuntime,
+                settings.getEnabledModels(),
+              );
+              const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+              return {
+                models: {},
+                modelList: scope.visible
+                  .map((m) => ({ id: m.id, name: m.name, provider: m.provider }))
+                  .sort((a, b) =>
+                    collator.compare(a.name || a.id, b.name || b.id)
+                    || collator.compare(a.provider, b.provider)
+                    || collator.compare(a.id, b.id),
+                  ),
+                defaultModel: null,
+                thinkingLevels: {},
+                thinkingLevelMaps: {},
+                thinkingLevelPins: {},
+              };
+            });
+            return data.modelList;
+          },
+          applyModelToActiveSession: async (sessionId, provider, modelId) => {
+            const { getRpcSession } = await import("@/lib/rpc-manager");
+            const wrapper = getRpcSession(sessionId);
+            if (!wrapper?.isAlive()) return false;
+            await wrapper.send({ type: "set_model", provider, modelId });
+            return true;
           },
           botUsername: () => runtime.getSettings()?.botUsername ?? null,
         });

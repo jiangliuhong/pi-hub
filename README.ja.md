@@ -15,37 +15,39 @@ Pi Web には Node.js 22.19.0 以降が必要です。現在のバージョン�
 **インストールせずに実行：**
 
 ```bash
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 **またはグローバルにインストール：**
 
 ```bash
-npm install -g @agegr/pi-web
-pi-web
+npm install -g @jarome/pi-hub
+pi-hub
 ```
 
-続いて [http://127.0.0.1:30141](http://127.0.0.1:30141) を開きます。サーバーの準備が整うと、CLI はブラウザを自動的に開こうとします。Pi Web はデフォルトで `127.0.0.1` のみをリッスンします。
+続いて [http://127.0.0.1:30142](http://127.0.0.1:30142) を開きます。サーバーの準備が整うと、CLI はブラウザを自動的に開こうとします。Pi Web はデフォルトで `127.0.0.1` のみをリッスンします。
 
 **オプション：**
 
 ```bash
-pi-web --port 8080              # カスタムポート
-pi-web --hostname 0.0.0.0       # 信頼できるネットワークに公開
-pi-web -p 8080 -H 0.0.0.0       # オプションを組み合わせる
-pi-web --no-open                # ブラウザを自動的に開かない
+pi-hub --port 8080              # カスタムポート
+pi-hub --hostname 0.0.0.0       # 信頼できるネットワークに公開
+pi-hub -p 8080 -H 0.0.0.0       # オプションを組み合わせる
+pi-hub --no-open                # ブラウザを自動的に開かない
 
-PORT=8080 pi-web                # 環境変数にも対応
-PI_WEB_HOSTNAME=0.0.0.0 pi-web  # ネットワーク公開を明示的に有効化
-PI_WEB_ALLOWED_HOSTS=pi-web.internal pi-web  # プロキシまたはカスタムホスト名を許可
-PI_WEB_PASSWORD='十分に長いランダムなパスワード' pi-web  # Basic Auth を有効化（ユーザー名: pi）
-PI_WEB_NO_OPEN=1 pi-web         # バックグラウンドサービスとして実行する場合に便利
+PORT=8080 pi-hub                # 環境変数にも対応
+PI_HUB_HOSTNAME=0.0.0.0 pi-hub  # ネットワーク公開を明示的に有効化
+PI_HUB_ALLOWED_HOSTS=pi-hub.internal pi-hub  # プロキシまたはカスタムホスト名を許可
+PI_HUB_PASSWORD='十分に長いランダムなパスワード' pi-hub  # Basic Auth を有効化（ユーザー名: pi）
+PI_HUB_NO_OPEN=1 pi-hub         # バックグラウンドサービスとして実行する場合に便利
 ```
 
-`PI_WEB_PASSWORD` を設定すると、Web インターフェースとすべての API エンドポイントが HTTP Basic Auth で保護されます。ユーザー名は常に `pi` です。未設定または空の場合、認証は無効です。
+> 環境変数は `PI_HUB_`（推奨）と `PI_WEB_`（上流の pi-web との後方互換性のためのレガシー名）のどちらのプレフィックスも使用できます。
+
+`PI_HUB_PASSWORD` を設定すると、Web インターフェースとすべての API エンドポイントが HTTP Basic Auth で保護されます。ユーザー名は常に `pi` です。未設定または空の場合、認証は無効です。
 
 Pi Web は高権限のエージェントを呼び出せます。Basic Auth は転送中のパスワードを暗号化しないため、平文 HTTP をインターネットに公開しないでください。リモートアクセスには、信頼できるリバースプロキシによる HTTPS または信頼できる VPN を使用してください。
-API リクエストでは、loopback 名、IP リテラル、選択したバインドホスト名、および `PI_WEB_ALLOWED_HOSTS` にカンマ区切りで指定した完全一致のホスト名のみを受け入れます。信頼できるリバースプロキシが異なる外部ホスト名を使用する場合は、この変数を設定してください。
+API リクエストでは、loopback 名、IP リテラル、選択したバインドホスト名、および `PI_HUB_ALLOWED_HOSTS` にカンマ区切りで指定した完全一致のホスト名のみを受け入れます。信頼できるリバースプロキシが異なる外部ホスト名を使用する場合は、この変数を設定してください。
 
 ## HTTP プロキシ
 
@@ -57,7 +59,7 @@ macOS または Linux：
 HTTP_PROXY=http://127.0.0.1:7890 \
 HTTPS_PROXY=http://127.0.0.1:7890 \
 NO_PROXY=localhost,127.0.0.1 \
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 Windows PowerShell：
@@ -66,7 +68,7 @@ Windows PowerShell：
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "localhost,127.0.0.1"
-npx @agegr/pi-web@latest
+npx @jarome/pi-hub@latest
 ```
 
 ## 機能
@@ -94,7 +96,7 @@ npm install
 npm run dev
 ```
 
-ローカル開発サーバーは [http://127.0.0.1:30141](http://127.0.0.1:30141) で動作します。
+ローカル開発サーバーは [http://127.0.0.1:30142](http://127.0.0.1:30142) で動作します。
 
 よく使うチェック：
 
@@ -145,6 +147,6 @@ hooks/
   useDragDrop.ts      # 画像のドラッグ＆ドロップ
   useTheme.ts         # テーマの切り替え
 bin/
-  pi-web.js           # npm CLI エントリポイント
+  pi-hub.js           # npm CLI エントリポイント
 instrumentation.ts    # サーバー HTTP ディスパッチャーの初期化
 ```

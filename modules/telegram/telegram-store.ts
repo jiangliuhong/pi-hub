@@ -77,6 +77,8 @@ export interface UpsertConversationInput {
   locale?: string;
   workspace?: string | null;
   toolVerbosity?: TelegramConversation["toolVerbosity"] | null;
+  modelProvider?: string | null;
+  modelId?: string | null;
 }
 
 export interface ConversationUpdate {
@@ -88,6 +90,8 @@ export interface ConversationUpdate {
   lastPrompt?: string | null;
   state?: TelegramConversation["state"];
   ownerUserId?: number | null;
+  modelProvider?: string | null;
+  modelId?: string | null;
 }
 
 // ---------------------------------------------------------------------------

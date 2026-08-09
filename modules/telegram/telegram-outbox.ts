@@ -22,7 +22,7 @@
 import { randomUUID } from "crypto";
 
 import { TelegramErrorCode, type TelegramError } from "./errors";
-import { TelegramTransport } from "./transport";
+import { TelegramTransport } from "./telegram-transport";
 import type { TelegramStore } from "./telegram-store";
 import type { OutboxEventType, OutboxStatus } from "./types";
 

@@ -146,10 +146,32 @@ export class TelegramPromptRunner {
         resumed ? conv.activeSessionId! : "",
         resumed ? conv.activeSessionPath! : "",
         conv.workspace ?? workspace,
-        {},
+        {
+          // Apply a per-conversation model pin set via /model. On a fresh
+          // session this is applied atomically at construction. For a resume,
+          // startRpcSession intentionally ignores initialModel when the session
+          // already has messages, so we re-assert it below after open.
+          ...(conv.modelProvider && conv.modelId
+            ? { initialModel: { provider: conv.modelProvider, modelId: conv.modelId } }
+            : {}),
+        },
       );
       session = opened.session;
       realSessionId = opened.realSessionId;
+      // Re-assert the model pin on a resumed session (startRpcSession does not
+      // apply initialModel to a session with existing messages). Best-effort:
+      // a failure here doesn't block the run.
+      if (resumed && conv.modelProvider && conv.modelId) {
+        try {
+          await session.send({
+            type: "set_model",
+            provider: conv.modelProvider,
+            modelId: conv.modelId,
+          });
+        } catch {
+          // Non-fatal — the run continues with the session's current model.
+        }
+      }
       if (!resumed) {
         conversationService.setActiveSession(input.chatId, input.threadId, realSessionId, session.sessionFile);
       } else {
@@ -163,7 +185,7 @@ export class TelegramPromptRunner {
     // 4. Acquire the run lock (§8.3).
     const runId = randomUUID();
     const ownerKey = telegramOwnerKey(input.chatId, input.threadId);
-    const acquired = this.coordinator.acquire(realSessionId, {
+    const acquired = this.coordinator.acquire({
       runId,
       sessionId: realSessionId,
       source: "telegram",

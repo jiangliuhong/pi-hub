@@ -16,7 +16,7 @@ const path = require("path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("fs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { parseLaunchOptions } = require("./pi-web-options");
+const { parseLaunchOptions, getEnv } = require("./pi-web-options");
 
 const pkgDir = path.join(__dirname, "..");
 const nextDir = path.join(pkgDir, ".next");
@@ -38,7 +38,7 @@ try {
 
 const { port, hostname, openBrowser } = parseLaunchOptions();
 const loopbackHostnames = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-const passwordEnabled = Boolean(process.env.PI_WEB_PASSWORD);
+const passwordEnabled = Boolean(getEnv(process.env, "PASSWORD"));
 
 if (!fs.existsSync(nextDir)) {
   console.error("Build artifacts not found. Please report this issue.");
@@ -48,11 +48,11 @@ if (!fs.existsSync(nextDir)) {
 if (!loopbackHostnames.has(hostname)) {
   if (passwordEnabled) {
     console.warn(
-      `Warning: pi-web is listening on ${hostname} with Basic Auth over HTTP. Use HTTPS or a trusted VPN to protect the password in transit.`,
+      `Warning: pi-hub is listening on ${hostname} with Basic Auth over HTTP. Use HTTPS or a trusted VPN to protect the password in transit.`,
     );
   } else {
     console.warn(
-      `Warning: pi-web is listening on ${hostname} without authentication. Only use this on a trusted network.`,
+      `Warning: pi-hub is listening on ${hostname} without authentication. Only use this on a trusted network.`,
     );
   }
 }
@@ -62,10 +62,12 @@ nextArgs.push("-H", hostname);
 
 // Always run next's JS entry with node directly — avoids .bin symlink issues
 // and path-with-spaces problems on Windows when shell: true is used.
+// Propagate the resolved hostname under both PI_HUB_* and PI_WEB_* so the
+// Next.js middleware (which may read either) trusts it for host checks.
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   cwd: pkgDir,
   stdio: ["inherit", "pipe", "inherit"],
-  env: { ...process.env, PI_WEB_HOSTNAME: hostname },
+  env: { ...process.env, PI_HUB_HOSTNAME: hostname, PI_WEB_HOSTNAME: hostname },
 });
 
 let browserOpened = false;

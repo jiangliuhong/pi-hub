@@ -22,6 +22,7 @@ import type { Locale } from "./telegram-i18n";
 import { strings } from "./telegram-i18n";
 import type { TaskService } from "@/modules/scheduler";
 import type { TelegramPromptRunner } from "./telegram-prompt-runner";
+import type { InlineKeyboardRows } from "./telegram-outbox";
 
 /** Lazily resolves the scheduler TaskService (null when scheduler is down). */
 export type SchedulerServiceResolver = () => TaskService | null;
@@ -31,12 +32,36 @@ export interface CallbackDeps {
   resolveScheduler: SchedulerServiceResolver;
   /** Acknowledge the callback query (clears the spinner). */
   answerCallback: (callbackQueryId: string, text?: string, showAlert?: boolean) => Promise<void>;
-  /** Reply in the originating chat. */
-  reply: (chatId: number, threadId: number | undefined, text: string) => Promise<void>;
+  /** Reply in the originating chat (optionally HTML + buttons). */
+  reply: (
+    chatId: number,
+    threadId: number | undefined,
+    text: string,
+    opts?: { parseMode?: "HTML"; inlineKeyboard?: InlineKeyboardRows },
+  ) => Promise<void>;
   /** Lazily resolves the prompt runner (for abort buttons). */
   getRunner: () => TelegramPromptRunner | null;
   /** Resolve settings for the private-only / role checks. */
   isPrivateOnly: () => boolean;
+  /** Re-renders a /sessions page (used by the prev/next buttons). */
+  renderSessionsPage: (input: RenderPageInput) => Promise<void>;
+  /** Re-renders a /model page (used by the prev/next buttons). */
+  renderModelsPage: (input: RenderPageInput) => Promise<void>;
+  /** Applies a model change to an active session; false if not in memory. */
+  applyModelToActiveSession: (
+    sessionId: string,
+    provider: string,
+    modelId: string,
+  ) => Promise<boolean>;
+}
+
+/** Input to re-render a paginated list as a fresh message. */
+export interface RenderPageInput {
+  chatId: number;
+  threadId: number;
+  userId: number;
+  page: number;
+  locale: Locale;
 }
 
 export interface CallbackInput {
@@ -101,8 +126,12 @@ export async function routeCallbackQuery(
       return handleAbort(deps, input, auth.user.telegramUserId, auth.user.role === "owner");
     case "workspace_switch":
       return handleWorkspaceSwitch(deps, input, result.action.payload);
+    case "session_switch":
+      return handleSessionSwitch(deps, input, result.action.payload);
+    case "model_switch":
+      return handleModelSwitch(deps, input, result.action.payload, auth.user.role);
     default:
-      // Other action types (session_switch, abort, …) arrive in phase 3.
+      // Other action types arrive in later phases.
       await deps.answerCallback(input.callbackQueryId, s.featureNotReady);
       return { handled: false, reason: "not_implemented" };
   }
@@ -193,5 +222,134 @@ async function handleWorkspaceSwitch(
   // Send a chat message so the user sees what to do next (the callback toast is
   // ephemeral; this makes the chosen workspace + next step visible inline).
   await deps.reply(input.chatId, input.threadId, s.workspaceReady(name));
+  return { handled: true };
+}
+
+/**
+ * Handles both modes of the session_switch action:
+ *  - { mode: "switch", sessionId, sessionPath, name }: rebind the conversation
+ *    to an existing session (§13.2 /sessions).
+ *  - { mode: "page", page }: re-render the sessions list at the given page.
+ */
+async function handleSessionSwitch(
+  deps: CallbackDeps,
+  input: CallbackInput,
+  payload: Record<string, unknown>,
+): Promise<CallbackResult> {
+  const s = strings(input.locale);
+  const mode = typeof payload.mode === "string" ? payload.mode : "switch";
+  const threadId = input.threadId ?? 0;
+
+  if (mode === "page") {
+    const page = typeof payload.page === "number" && payload.page > 0 ? payload.page : 0;
+    await deps.answerCallback(input.callbackQueryId);
+    await deps.renderSessionsPage({
+      chatId: input.chatId,
+      threadId,
+      userId: input.userId,
+      page,
+      locale: input.locale,
+    });
+    return { handled: true };
+  }
+
+  // mode === "switch"
+  // Note: viewers are allowed to switch sessions — rebinding only updates the
+  // conversation pointer and never executes code. The actual run is still
+  // gated by runPrompt's role check, so this stays safe.
+  const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : null;
+  const sessionPath = typeof payload.sessionPath === "string" ? payload.sessionPath : null;
+  const name = typeof payload.name === "string" ? payload.name : s.sessionsUnnamed;
+  if (!sessionId || !sessionPath) {
+    await deps.answerCallback(input.callbackQueryId, s.featureNotReady, true);
+    return { handled: false, reason: "no_session" };
+  }
+  // Refuse switching while a run is active for this conversation.
+  const conv = deps.store.getConversation(input.chatId, threadId);
+  if (conv && conv.state === "running") {
+    await deps.answerCallback(input.callbackQueryId, s.sessionsBusy, true);
+    return { handled: false, reason: "busy" };
+  }
+  deps.store.updateConversation(input.chatId, threadId, {
+    activeSessionId: sessionId,
+    activeSessionPath: sessionPath,
+    state: "idle",
+  });
+  await deps.answerCallback(input.callbackQueryId, s.sessionsSwitched(name));
+  return { handled: true };
+}
+
+/**
+ * Handles both modes of the model_switch action:
+ *  - { mode: "switch", provider, modelId, name }: persist the model on the
+ *    conversation and apply it to the live session if present.
+ *  - { mode: "page", page }: re-render the model list at the given page.
+ */
+async function handleModelSwitch(
+  deps: CallbackDeps,
+  input: CallbackInput,
+  payload: Record<string, unknown>,
+  role: string,
+): Promise<CallbackResult> {
+  const s = strings(input.locale);
+  const mode = typeof payload.mode === "string" ? payload.mode : "switch";
+  const threadId = input.threadId ?? 0;
+
+  if (mode === "page") {
+    const page = typeof payload.page === "number" && payload.page > 0 ? payload.page : 0;
+    await deps.answerCallback(input.callbackQueryId);
+    await deps.renderModelsPage({
+      chatId: input.chatId,
+      threadId,
+      userId: input.userId,
+      page,
+      locale: input.locale,
+    });
+    return { handled: true };
+  }
+
+  // mode === "switch"
+  const provider = typeof payload.provider === "string" ? payload.provider : null;
+  const modelId = typeof payload.modelId === "string" ? payload.modelId : null;
+  const name = typeof payload.name === "string" ? payload.name : (modelId ?? "");
+  if (!provider || !modelId) {
+    await deps.answerCallback(input.callbackQueryId, s.modelInvalid, true);
+    return { handled: false, reason: "no_model" };
+  }
+  if (role === "viewer") {
+    await deps.answerCallback(input.callbackQueryId, s.featureNotReady, true);
+    return { handled: false, reason: "forbidden_role" };
+  }
+  const conv = deps.store.getConversation(input.chatId, threadId);
+  if (conv && conv.state === "running") {
+    await deps.answerCallback(input.callbackQueryId, s.modelBusy, true);
+    return { handled: false, reason: "busy" };
+  }
+  // Persist on the conversation row (applied on next session open/resume).
+  if (conv) {
+    deps.store.updateConversation(input.chatId, threadId, {
+      modelProvider: provider,
+      modelId,
+    });
+  } else {
+    deps.store.upsertConversation({
+      chatId: input.chatId,
+      threadId,
+      ownerUserId: input.userId,
+      workspace: null,
+      locale: input.locale,
+      modelProvider: provider,
+      modelId,
+    });
+  }
+  // Apply to the live session immediately if it is still in memory.
+  if (conv?.activeSessionId) {
+    try {
+      await deps.applyModelToActiveSession(conv.activeSessionId, provider, modelId);
+    } catch {
+      // Non-fatal: the persisted pin will apply on the next open/resume.
+    }
+  }
+  await deps.answerCallback(input.callbackQueryId, s.modelSwitched(name));
   return { handled: true };
 }

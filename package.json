@@ -1,21 +1,21 @@
 {
-  "name": "@agegr/pi-web",
+  "name": "@jarome/pi-hub",
   "version": "0.0.1",
-  "description": "Web UI for the pi coding agent",
-  "homepage": "https://github.com/agegr/pi-web#readme",
+  "description": "Web UI for the pi coding agent (pi-hub fork of pi-web, with scheduler, Telegram and notification integrations)",
+  "homepage": "https://github.com/jiangliuhong/pi-hub#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agegr/pi-web.git"
+    "url": "git+https://github.com/jiangliuhong/pi-hub.git"
   },
   "bugs": {
-    "url": "https://github.com/agegr/pi-web/issues"
+    "url": "https://github.com/jiangliuhong/pi-hub/issues"
   },
   "license": "MIT",
   "engines": {
     "node": ">=22.19.0"
   },
   "bin": {
-    "pi-web": "bin/pi-web.js"
+    "pi-hub": "bin/pi-hub.js"
   },
   "files": [
     "bin",
@@ -35,7 +35,7 @@
     "start:lan": "next start -H 0.0.0.0 -p 30142",
     "lint": "eslint .",
     "test": "node --experimental-strip-types --test lib/markdown.test.mjs",
-    "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
+    "release": "npm run build && npm publish --access public"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.0",

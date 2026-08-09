@@ -3,9 +3,7 @@ import { NextResponse } from "next/server";
 import {
   getTelegramRuntime,
   coerceBotApiConfig,
-  normalizeApiRoot,
   normalizeLocalFileRoot,
-  TelegramErrorCode,
   TelegramError,
   type TelegramSettings,
   type ToolVerbosity,
@@ -152,15 +150,5 @@ export async function PUT(req: Request) {
     return NextResponse.json(configToDto(store.getSettings()));
   } catch (error) {
     return telegramErrorResponse(error);
-  }
-}
-
-/** Validates a standalone apiRoot string (used by the test route + UI). */
-export function validateApiRootString(value: string): string {
-  try {
-    return normalizeApiRoot(value);
-  } catch (error) {
-    if (error instanceof TelegramError) throw error;
-    throw new TelegramError(TelegramErrorCode.TELEGRAM_API_ROOT_INVALID, String(error));
   }
 }

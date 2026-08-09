@@ -163,6 +163,15 @@ const MIGRATIONS: TelegramMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    // /model command: per-conversation model pin (§13.3). Nullable; null means
+    // "follow pi defaults" (no override). Applied on session open/resume.
+    version: 2,
+    up: `
+      ALTER TABLE telegram_conversations ADD COLUMN model_provider TEXT;
+      ALTER TABLE telegram_conversations ADD COLUMN model_id TEXT;
+    `,
+  },
 ];
 
 /**

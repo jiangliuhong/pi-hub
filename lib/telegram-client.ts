@@ -105,10 +105,16 @@ async function asJson(res: Response): Promise<never> {
   } catch {
     // keep null
   }
-  const err = new Error(
-    (body && typeof body === "object" && "error" in body && String((body as { error: unknown }).error)) ||
-      `request failed (${res.status})`,
-  ) as Error & { code?: string; status?: number };
+  let message = `request failed (${res.status})`;
+  if (body && typeof body === "object" && "error" in body) {
+    const errorField = (body as { error: unknown }).error;
+    if (typeof errorField === "string" && errorField.length > 0) {
+      message = errorField;
+    } else {
+      message = String(errorField);
+    }
+  }
+  const err = new Error(message) as Error & { code?: string; status?: number };
   err.code =
     body && typeof body === "object" && "code" in body
       ? String((body as { code: unknown }).code)

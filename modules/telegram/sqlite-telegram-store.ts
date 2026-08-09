@@ -103,6 +103,8 @@ interface ConversationRow {
   locale: string;
   tool_verbosity: ToolVerbosity | null;
   last_prompt: string | null;
+  model_provider: string | null;
+  model_id: string | null;
   state: TelegramConversation["state"];
   created_at: number;
   updated_at: number;
@@ -226,6 +228,8 @@ function rowToConversation(r: ConversationRow): TelegramConversation {
     locale: r.locale,
     toolVerbosity: r.tool_verbosity,
     lastPrompt: r.last_prompt,
+    modelProvider: r.model_provider,
+    modelId: r.model_id,
     state: r.state,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -402,7 +406,7 @@ export class SqliteTelegramStore implements TelegramStore {
   listUsers(): TelegramUser[] {
     const rows = this.db
       .prepare("SELECT * FROM telegram_users ORDER BY paired_at ASC")
-      .all() as UserRow[];
+      .all() as unknown as UserRow[];
     return rows.map(rowToUser);
   }
 
@@ -542,7 +546,7 @@ export class SqliteTelegramStore implements TelegramStore {
       .prepare(
         "SELECT * FROM telegram_conversations ORDER BY updated_at DESC LIMIT 500",
       )
-      .all() as ConversationRow[];
+      .all() as unknown as ConversationRow[];
     return rows.map(rowToConversation);
   }
 
@@ -555,11 +559,13 @@ export class SqliteTelegramStore implements TelegramStore {
           chat_id, thread_id, owner_user_id,
           active_session_id, active_session_path, workspace,
           locale, tool_verbosity, last_prompt, state,
+          model_provider, model_id,
           created_at, updated_at
         ) VALUES (
           @chat_id, @thread_id, @owner_user_id,
           @active_session_id, @active_session_path, @workspace,
           @locale, @tool_verbosity, @last_prompt, @state,
+          @model_provider, @model_id,
           @created_at, @updated_at
         )
         ON CONFLICT(chat_id, thread_id) DO UPDATE SET
@@ -567,6 +573,8 @@ export class SqliteTelegramStore implements TelegramStore {
           locale = COALESCE(@locale, locale),
           workspace = COALESCE(@workspace, workspace),
           tool_verbosity = COALESCE(@tool_verbosity, tool_verbosity),
+          model_provider = COALESCE(@model_provider, model_provider),
+          model_id = COALESCE(@model_id, model_id),
           updated_at = @updated_at`,
       )
       .run({
@@ -580,6 +588,8 @@ export class SqliteTelegramStore implements TelegramStore {
         tool_verbosity: input.toolVerbosity ?? existing?.toolVerbosity ?? null,
         last_prompt: existing?.lastPrompt ?? null,
         state: existing?.state ?? "idle",
+        model_provider: input.modelProvider ?? existing?.modelProvider ?? null,
+        model_id: input.modelId ?? existing?.modelId ?? null,
         created_at: existing?.createdAt ?? now,
         updated_at: now,
       });
@@ -605,6 +615,8 @@ export class SqliteTelegramStore implements TelegramStore {
           last_prompt = @last_prompt,
           state = @state,
           owner_user_id = @owner_user_id,
+          model_provider = @model_provider,
+          model_id = @model_id,
           updated_at = @updated_at
         WHERE chat_id = @chat_id AND thread_id = @thread_id`,
       )
@@ -621,6 +633,8 @@ export class SqliteTelegramStore implements TelegramStore {
         last_prompt: patch.lastPrompt !== undefined ? patch.lastPrompt : current.lastPrompt,
         state: patch.state ?? current.state,
         owner_user_id: patch.ownerUserId !== undefined ? patch.ownerUserId : current.ownerUserId,
+        model_provider: patch.modelProvider !== undefined ? patch.modelProvider : current.modelProvider,
+        model_id: patch.modelId !== undefined ? patch.modelId : current.modelId,
         updated_at: now,
       });
     return this.getConversation(chatId, threadId);
@@ -650,7 +664,7 @@ export class SqliteTelegramStore implements TelegramStore {
          WHERE state IN ('running', 'switching', 'transcribing')`,
       )
       .run({ now });
-    return result.changes;
+    return Number(result.changes);
   }
 
   // ---- pairing -------------------------------------------------------------
@@ -673,7 +687,7 @@ export class SqliteTelegramStore implements TelegramStore {
     return rowToPairing(
       this.db
         .prepare("SELECT * FROM telegram_pairing_codes WHERE id = ?")
-        .get(input.id) as PairingRow,
+        .get(input.id) as unknown as PairingRow,
     );
   }
 
@@ -682,7 +696,7 @@ export class SqliteTelegramStore implements TelegramStore {
       .prepare(
         "SELECT * FROM telegram_pairing_codes WHERE used_at IS NULL AND expires_at >= ? ORDER BY created_at DESC",
       )
-      .all(now) as PairingRow[];
+      .all(now) as unknown as PairingRow[];
     return rows.map(rowToPairing);
   }
 
@@ -720,7 +734,7 @@ export class SqliteTelegramStore implements TelegramStore {
     const result = this.db
       .prepare("DELETE FROM telegram_pairing_codes WHERE expires_at < ?")
       .run(now);
-    return result.changes;
+    return Number(result.changes);
   }
 
   // ---- actions -------------------------------------------------------------
@@ -783,7 +797,7 @@ export class SqliteTelegramStore implements TelegramStore {
     const result = this.db
       .prepare("DELETE FROM telegram_actions WHERE expires_at < ?")
       .run(now);
-    return result.changes;
+    return Number(result.changes);
   }
 
   // ---- outbox --------------------------------------------------------------
@@ -818,7 +832,7 @@ export class SqliteTelegramStore implements TelegramStore {
       return rowToOutbox(
         this.db
           .prepare("SELECT * FROM telegram_notification_outbox WHERE id = ?")
-          .get(input.id) as OutboxRow,
+          .get(input.id) as unknown as OutboxRow,
       );
     } catch {
       // UNIQUE(dedupe_key) → already enqueued; this is expected (idempotent).
@@ -834,7 +848,7 @@ export class SqliteTelegramStore implements TelegramStore {
          ORDER BY next_attempt_at ASC
          LIMIT ?`,
       )
-      .all(status, limit) as OutboxRow[];
+      .all(status, limit) as unknown as OutboxRow[];
     return rows.map(rowToOutbox);
   }
 
@@ -881,7 +895,7 @@ export class SqliteTelegramStore implements TelegramStore {
   listSubscriptionsForTask(taskId: string): TelegramTaskSubscription[] {
     const rows = this.db
       .prepare("SELECT * FROM telegram_task_subscriptions WHERE task_id = ?")
-      .all(taskId) as SubscriptionRow[];
+      .all(taskId) as unknown as SubscriptionRow[];
     return rows.map(rowToSubscription);
   }
 
@@ -926,7 +940,7 @@ export class SqliteTelegramStore implements TelegramStore {
         .prepare(
           "SELECT * FROM telegram_task_subscriptions WHERE task_id = ? AND chat_id = ? AND thread_id = ?",
         )
-        .get(input.taskId, input.chatId, input.threadId) as SubscriptionRow,
+        .get(input.taskId, input.chatId, input.threadId) as unknown as SubscriptionRow,
     );
   }
 

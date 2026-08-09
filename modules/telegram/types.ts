@@ -105,6 +105,11 @@ export interface TelegramConversation {
   toolVerbosity: ToolVerbosity | null;
   lastPrompt: string | null;
 
+  /** Per-conversation model pin (set via /model). null = follow pi defaults. */
+  modelProvider: string | null;
+  /** Per-conversation model id (set via /model). null = follow pi defaults. */
+  modelId: string | null;
+
   state: ConversationState;
 
   createdAt: number;

@@ -36,10 +36,28 @@ import { ActionService } from "./telegram-actions";
 import type { InlineKeyboardRows } from "./telegram-outbox";
 import type { TelegramPromptRunner } from "./telegram-prompt-runner";
 import type { TaskService, TaskDefinition } from "@/modules/scheduler";
+import type { SessionInfo } from "@/lib/types";
 import { randomUUID } from "crypto";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Ctx = any;
+
+/** Snapshot of an active session's state (subset of get_state output). */
+interface SessionStateSnapshot {
+  model: { id: string; provider: string } | null;
+  thinkingLevel: string;
+  messageCount: number;
+  isCompacting: boolean;
+  autoCompactionEnabled: boolean;
+  contextUsage: { percent: number; tokens: number; contextWindow: number } | null;
+}
+
+/** A selectable model option for /model. */
+interface ModelOption {
+  id: string;
+  name: string;
+  provider: string;
+}
 
 interface DispatcherDeps {
   store: TelegramStore;
@@ -59,6 +77,18 @@ interface DispatcherDeps {
   getRunner: () => TelegramPromptRunner | null;
   /** Lists known workspaces (recent project roots derived from sessions). */
   listWorkspaces: () => Promise<{ path: string; name: string }[]>;
+  /** Lists all sessions across workspaces (cached 30s in lib/session-reader). */
+  listAllSessions: () => Promise<SessionInfo[]>;
+  /** Reads the live state of an active session, or null if not in memory. */
+  getSessionState: (sessionId: string) => Promise<SessionStateSnapshot | null>;
+  /** Lists the visible models for a workspace (enabledModels scope applied). */
+  listModels: (workspace: string) => Promise<ModelOption[]>;
+  /** Applies a model change to an active session; false if not in memory. */
+  applyModelToActiveSession: (
+    sessionId: string,
+    provider: string,
+    modelId: string,
+  ) => Promise<boolean>;
   /** Resolves the bot username (for /start). */
   botUsername: () => string | null;
 }
@@ -87,7 +117,7 @@ export function createDispatcher(deps: DispatcherDeps): UpdateHandler {
           });
         }
         // Default (no language code) = zh-CN.
-        await bot.api.setMyCommands(commandList(settings.defaultLocale));
+        await bot.api.setMyCommands(commandList(resolveLocale(settings.defaultLocale)));
       } catch (error) {
         console.warn(
           "[pi-hub:telegram] setMyCommands failed",
@@ -336,7 +366,7 @@ async function handleAuthedCommand(
       return;
     }
     case "sessions": {
-      await deps.reply(meta.chatId, meta.threadId, s.featureNotReady);
+      await handleSessions(command.args, meta, deps);
       return;
     }
     case "abort": {
@@ -366,10 +396,16 @@ async function handleAuthedCommand(
       });
       return;
     }
-    case "model":
-    case "context":
+    case "model": {
+      await handleModel(command.args, meta, deps);
+      return;
+    }
+    case "context": {
+      await handleContext(meta, deps);
+      return;
+    }
     case "commands": {
-      await deps.reply(meta.chatId, meta.threadId, s.featureNotReady);
+      await handleCommands(meta, deps);
       return;
     }
     case "tasks": {
@@ -419,6 +455,9 @@ async function handleCallback(
       reply: deps.reply,
       getRunner: deps.getRunner,
       isPrivateOnly: () => settings.privateOnly,
+      renderSessionsPage: (input) => renderSessionsPage(deps, input),
+      renderModelsPage: (input) => renderModelsPage(deps, input),
+      applyModelToActiveSession: deps.applyModelToActiveSession,
     },
     {
       callbackQueryId: cb.id,
@@ -528,6 +567,515 @@ async function handleWorkspace(
   await deps.reply(meta.chatId, meta.threadId, header, {
     parseMode: "HTML",
     inlineKeyboard: rows,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Session browsing & context (§13.2): /sessions, /context, /model, /commands
+// ---------------------------------------------------------------------------
+
+/** Sessions per page in /sessions. Telegram inline keyboards handle ~30 buttons
+ *  comfortably; 10 keeps each page readable and avoids huge messages. */
+const SESSIONS_PAGE_SIZE = 10;
+/** Models per page in /model. Model names can be long, so fewer per page. */
+const MODELS_PAGE_SIZE = 8;
+
+interface CommandMeta {
+  user: TelegramUser;
+  chatId: number;
+  threadId: number | undefined;
+  locale: Locale;
+}
+
+/**
+ * Builds the /sessions inline keyboard for a page and returns the header text +
+ * rows. Returns null when the workspace has no sessions or no workspace is set.
+ *
+ * Shared between /sessions and the session_switch "page" callback so both render
+ * the same way.
+ */
+export async function buildSessionsKeyboard(
+  deps: DispatcherDeps,
+  meta: CommandMeta,
+  page: number,
+): Promise<{ header: string; rows: InlineKeyboardRows } | null> {
+  const s = strings(meta.locale);
+  const threadId = meta.threadId ?? 0;
+  const conv = deps.store.getConversation(meta.chatId, threadId);
+  const workspace = conv?.workspace ?? null;
+  if (!workspace) return null;
+
+  let sessions: SessionInfo[];
+  try {
+    sessions = await deps.listAllSessions();
+  } catch {
+    return null;
+  }
+  // Filter to this workspace's project root (same rule as listWorkspaces).
+  const wsSessions = sessions
+    .filter((x) => (x.projectRoot ?? x.cwd) === workspace)
+    .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
+
+  if (wsSessions.length === 0) {
+    return { header: s.sessionsEmpty, rows: [] };
+  }
+
+  const totalPages = Math.max(1, Math.ceil(wsSessions.length / SESSIONS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(0, page), totalPages - 1);
+  const start = safePage * SESSIONS_PAGE_SIZE;
+  const slice = wsSessions.slice(start, start + SESSIONS_PAGE_SIZE);
+
+  const actions = new ActionService(deps.store);
+  const activeId = conv?.activeSessionId ?? null;
+  const rows: { text: string; callbackData: string }[][] = slice.map((sess) => {
+    const label = sess.name?.trim() || sess.firstMessage?.slice(0, 24) || s.sessionsUnnamed;
+    const { callbackData } = actions.create({
+      actionType: "session_switch",
+      payload: {
+        mode: "switch",
+        sessionId: sess.id,
+        sessionPath: sess.path,
+        name: label,
+      },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    const prefix = activeId && activeId === sess.id ? "✅ " : "";
+    return [{ text: `${prefix}${label}`, callbackData }];
+  });
+
+  // Prev / next row.
+  const navRow: { text: string; callbackData: string }[] = [];
+  if (safePage > 0) {
+    const { callbackData } = actions.create({
+      actionType: "session_switch",
+      payload: { mode: "page", page: safePage - 1 },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    navRow.push({ text: s.sessionsPrev, callbackData });
+  }
+  if (safePage < totalPages - 1) {
+    const { callbackData } = actions.create({
+      actionType: "session_switch",
+      payload: { mode: "page", page: safePage + 1 },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    navRow.push({ text: s.sessionsNext, callbackData });
+  }
+  if (navRow.length > 0) rows.push(navRow);
+
+  const wsName = workspace.split("/").filter(Boolean).pop() ?? workspace;
+  const header = [
+    `<b>${esc(s.sessionsTitle)}</b>`,
+    `${esc(wsName)} · ${s.sessionsPage(safePage + 1, totalPages)}`,
+  ].join("\n");
+  return { header, rows };
+}
+
+async function handleSessions(
+  arg: string,
+  meta: CommandMeta,
+  deps: DispatcherDeps,
+): Promise<void> {
+  const s = strings(meta.locale);
+  const conv = deps.store.getConversation(meta.chatId, meta.threadId ?? 0);
+  if (!conv?.workspace) {
+    await deps.reply(meta.chatId, meta.threadId, s.sessionsNoWorkspace);
+    return;
+  }
+  const page = parsePageIndex(arg);
+  let keyboard: { header: string; rows: InlineKeyboardRows } | null;
+  try {
+    keyboard = await buildSessionsKeyboard(deps, meta, page);
+  } catch (error) {
+    await deps.reply(meta.chatId, meta.threadId, `读取 Session 失败：${errMsg(error)}`);
+    return;
+  }
+  if (!keyboard) {
+    await deps.reply(meta.chatId, meta.threadId, s.sessionsNoWorkspace);
+    return;
+  }
+  await deps.reply(meta.chatId, meta.threadId, keyboard.header, {
+    parseMode: "HTML",
+    inlineKeyboard: keyboard.rows,
+  });
+}
+
+async function handleContext(
+  meta: CommandMeta,
+  deps: DispatcherDeps,
+): Promise<void> {
+  const s = strings(meta.locale);
+  const conv = deps.store.getConversation(meta.chatId, meta.threadId ?? 0);
+  const sessionId = conv?.activeSessionId ?? null;
+  const sessionPath = conv?.activeSessionPath ?? null;
+  if (!sessionId) {
+    await deps.reply(meta.chatId, meta.threadId, s.contextNoSession);
+    return;
+  }
+
+  // Prefer live state for an in-memory session; fall back to the persisted file.
+  let live: SessionStateSnapshot | null = null;
+  try {
+    live = await deps.getSessionState(sessionId);
+  } catch {
+    live = null;
+  }
+
+  // Read the persisted session file for model/thinking/message count. Done in
+  // both branches because the live get_state returns a hard-coded messageCount
+  // of 0 (the SDK doesn't populate it), so the file is the reliable source for
+  // that field.
+  let fileCtx: {
+    messages: unknown[];
+    model: { provider: string; modelId: string } | null;
+    thinkingLevel: string;
+  } | null = null;
+  if (sessionPath) {
+    try {
+      const { getSessionEntries, buildSessionContext } = await import("@/lib/session-reader");
+      const entries = getSessionEntries(sessionPath);
+      fileCtx = buildSessionContext(entries);
+    } catch {
+      fileCtx = null;
+    }
+  }
+
+  let modelLabel: string;
+  let thinkingLabel: string;
+  let messageCount: number | null;
+  let usageLine: string | null = null;
+  let compactLine: string | null = null;
+
+  if (live) {
+    // Live model/thinking is authoritative; fall back to the file for those if
+    // the SDK returned nothing. Message count always comes from the file.
+    const model = live.model
+      ?? (fileCtx?.model
+        ? { id: fileCtx.model.modelId, provider: fileCtx.model.provider }
+        : null);
+    modelLabel = model ? `${esc(model.provider)}/${esc(model.id)}` : s.contextUnknown;
+    thinkingLabel = esc(live.thinkingLevel || fileCtx?.thinkingLevel || s.contextUnknown);
+    messageCount = fileCtx?.messages.length ?? null;
+    if (live.contextUsage) {
+      usageLine = s.contextUsage(
+        live.contextUsage.percent,
+        live.contextUsage.tokens,
+        live.contextUsage.contextWindow,
+      );
+    }
+    const compactState = live.isCompacting ? s.contextCompacting : s.contextIdle;
+    compactLine = `${compactState} · ${s.contextAutoCompact(live.autoCompactionEnabled)}`;
+  } else if (fileCtx) {
+    modelLabel = fileCtx.model
+      ? `${esc(fileCtx.model.provider)}/${esc(fileCtx.model.modelId)}`
+      : s.contextDefault;
+    thinkingLabel = esc(fileCtx.thinkingLevel || s.contextDefault);
+    messageCount = fileCtx.messages.length;
+  } else {
+    modelLabel = s.contextUnknown;
+    thinkingLabel = s.contextUnknown;
+    messageCount = null;
+  }
+
+  const lines: string[] = [
+    `<b>${esc(s.contextTitle)}</b>`,
+    `Session：<code>${esc(sessionId.slice(0, 8))}</code>`,
+    `${esc(s.contextModel)}：<code>${modelLabel}</code>`,
+    `${esc(s.contextThinking)}：<code>${thinkingLabel}</code>`,
+  ];
+  if (messageCount !== null) {
+    lines.push(`${esc(s.contextMessages)}：${messageCount}`);
+  }
+  if (usageLine) lines.push(esc(usageLine));
+  if (compactLine) lines.push(esc(compactLine));
+  await deps.reply(meta.chatId, meta.threadId, lines.join("\n"), { parseMode: "HTML" });
+}
+
+/**
+ * Builds the /model inline keyboard for a page. Returns null when models can't
+ * be resolved for the workspace.
+ */
+export async function buildModelsKeyboard(
+  deps: DispatcherDeps,
+  meta: CommandMeta,
+  page: number,
+): Promise<{ header: string; rows: InlineKeyboardRows } | null> {
+  const s = strings(meta.locale);
+  const threadId = meta.threadId ?? 0;
+  const conv = deps.store.getConversation(meta.chatId, threadId);
+  const workspace = conv?.workspace ?? null;
+  if (!workspace) return null;
+
+  let models: ModelOption[];
+  try {
+    models = await deps.listModels(workspace);
+  } catch {
+    return null;
+  }
+  if (models.length === 0) {
+    return { header: s.modelInvalid, rows: [] };
+  }
+
+  const totalPages = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
+  const safePage = Math.min(Math.max(0, page), totalPages - 1);
+  const start = safePage * MODELS_PAGE_SIZE;
+  const slice = models.slice(start, start + MODELS_PAGE_SIZE);
+
+  const actions = new ActionService(deps.store);
+  const curProvider = conv?.modelProvider ?? null;
+  const curModelId = conv?.modelId ?? null;
+  const rows: { text: string; callbackData: string }[][] = slice.map((m) => {
+    const { callbackData } = actions.create({
+      actionType: "model_switch",
+      payload: { mode: "switch", provider: m.provider, modelId: m.id, name: m.name || m.id },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    const prefix = curProvider && curModelId && curProvider === m.provider && curModelId === m.id ? "✅ " : "";
+    return [{ text: `${prefix}${m.name || m.id}`, callbackData }];
+  });
+
+  // Prev / next row.
+  const navRow: { text: string; callbackData: string }[] = [];
+  if (safePage > 0) {
+    const { callbackData } = actions.create({
+      actionType: "model_switch",
+      payload: { mode: "page", page: safePage - 1 },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    navRow.push({ text: s.pagePrev, callbackData });
+  }
+  if (safePage < totalPages - 1) {
+    const { callbackData } = actions.create({
+      actionType: "model_switch",
+      payload: { mode: "page", page: safePage + 1 },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId,
+    });
+    navRow.push({ text: s.pageNext, callbackData });
+  }
+  if (navRow.length > 0) rows.push(navRow);
+
+  const currentLabel = curProvider && curModelId
+    ? `${esc(curProvider)}/${esc(curModelId)}`
+    : s.modelDefault;
+  const header = [
+    `<b>${esc(s.modelTitle)}</b>`,
+    `${esc(s.modelCurrent)}：<code>${currentLabel}</code>`,
+    s.modelAvailable,
+  ].join("\n");
+  return { header, rows };
+}
+
+async function handleModel(
+  arg: string,
+  meta: CommandMeta,
+  deps: DispatcherDeps,
+): Promise<void> {
+  const s = strings(meta.locale);
+  if (meta.user.role === "viewer") {
+    await deps.reply(meta.chatId, meta.threadId, "权限不足：需要 operator 或 owner。");
+    return;
+  }
+  const conv = deps.store.getConversation(meta.chatId, meta.threadId ?? 0);
+  if (!conv?.workspace) {
+    await deps.reply(meta.chatId, meta.threadId, s.sessionsNoWorkspace);
+    return;
+  }
+
+  const raw = arg.trim();
+  if (raw) {
+    // Direct set: /model <provider/modelId> or /model <modelId>.
+    await applyModelByArg(deps, meta, conv, raw);
+    return;
+  }
+
+  // No arg: show the picker.
+  const page = 0;
+  let keyboard: { header: string; rows: InlineKeyboardRows } | null;
+  try {
+    keyboard = await buildModelsKeyboard(deps, meta, page);
+  } catch (error) {
+    await deps.reply(meta.chatId, meta.threadId, `读取模型失败：${errMsg(error)}`);
+    return;
+  }
+  if (!keyboard) {
+    await deps.reply(meta.chatId, meta.threadId, s.sessionsNoWorkspace);
+    return;
+  }
+  await deps.reply(meta.chatId, meta.threadId, keyboard.header, {
+    parseMode: "HTML",
+    inlineKeyboard: keyboard.rows,
+  });
+}
+
+/** Resolves a `/model <arg>` against the visible model list and persists it. */
+async function applyModelByArg(
+  deps: DispatcherDeps,
+  meta: CommandMeta,
+  conv: NonNullable<ReturnType<TelegramStore["getConversation"]>>,
+  raw: string,
+): Promise<void> {
+  const s = strings(meta.locale);
+  const workspace = conv.workspace!;
+  let models: ModelOption[];
+  try {
+    models = await deps.listModels(workspace);
+  } catch (error) {
+    await deps.reply(meta.chatId, meta.threadId, `读取模型失败：${errMsg(error)}`);
+    return;
+  }
+  const needle = raw.toLowerCase();
+  const match = models.find((m) => {
+    const full = `${m.provider}/${m.id}`.toLowerCase();
+    return full === needle || m.id.toLowerCase() === needle;
+  });
+  if (!match) {
+    await deps.reply(meta.chatId, meta.threadId, s.modelInvalid, { parseMode: "HTML" });
+    return;
+  }
+  deps.store.updateConversation(meta.chatId, meta.threadId ?? 0, {
+    modelProvider: match.provider,
+    modelId: match.id,
+  });
+  if (conv.activeSessionId) {
+    try {
+      await deps.applyModelToActiveSession(conv.activeSessionId, match.provider, match.id);
+    } catch {
+      // Non-fatal: the pin applies on the next open/resume.
+    }
+  }
+  await deps.reply(
+    meta.chatId,
+    meta.threadId,
+    s.modelSwitched(match.name || match.id),
+    { parseMode: "HTML" },
+  );
+}
+
+async function handleCommands(
+  meta: CommandMeta,
+  deps: DispatcherDeps,
+): Promise<void> {
+  const s = strings(meta.locale);
+  const cmds = commandList(meta.locale);
+  // Group commands by category for readability.
+  const groups: Record<string, string[]> = {
+    [s.commandsGroupBasic]: ["start", "help", "pair", "status", "lang"],
+    [s.commandsGroupSession]: ["session", "new", "sessions", "workspace", "context", "model"],
+    [s.commandsGroupRun]: ["abort", "retry"],
+    [s.commandsGroupTask]: ["tasks", "task", "run", "commands"],
+  };
+  const byName = new Map(cmds.map((c) => [c.command, c.description]));
+  const lines: string[] = [`<b>${esc(s.commandsTitle)}</b>`, ""];
+  for (const [groupName, names] of Object.entries(groups)) {
+    lines.push(`<b>${esc(groupName)}</b>`);
+    for (const name of names) {
+      const desc = byName.get(name);
+      if (!desc) continue;
+      lines.push(`/${esc(name)} — ${esc(desc)}`);
+    }
+    lines.push("");
+  }
+  await deps.reply(meta.chatId, meta.threadId, lines.join("\n"), { parseMode: "HTML" });
+}
+
+/** Parses a 1-based page number from a command arg ("2" → 1, i.e. 0-based). */
+function parsePageIndex(arg: string): number {
+  const n = parseInt(arg.trim(), 10);
+  if (!Number.isFinite(n) || n <= 1) return 0;
+  return n - 1;
+}
+
+/**
+ * Re-renders a /sessions page as a fresh message. Used by the session_switch
+ * "page" callback (prev/next buttons). Exposed so the runtime can wire it into
+ * the callback router without duplicating the rendering logic.
+ *
+ * Known limitation: this posts a new message rather than editing the original
+ * inline keyboard in place (the `reply` dep does not expose editMessageText/
+ * editMessageReplyMarkup yet). Old messages' buttons are inert — their action
+ * tokens are single-use — but they remain visible, so the chat accumulates one
+ * list message per page flip. Can be upgraded to in-place edits in a later pass
+ * by extending the reply dep with the transport's edit helpers.
+ */
+export async function renderSessionsPage(
+  deps: DispatcherDeps,
+  input: {
+    chatId: number;
+    threadId: number;
+    userId: number;
+    page: number;
+    locale: Locale;
+  },
+): Promise<void> {
+  const meta: CommandMeta = {
+    // Role isn't needed for rendering; reuse a minimal stub. Authorization was
+    // already checked by the callback router before reaching here.
+    user: { telegramUserId: input.userId } as TelegramUser,
+    chatId: input.chatId,
+    threadId: input.threadId,
+    locale: input.locale,
+  };
+  let keyboard: { header: string; rows: InlineKeyboardRows } | null;
+  try {
+    keyboard = await buildSessionsKeyboard(deps, meta, input.page);
+  } catch (error) {
+    await deps.reply(input.chatId, input.threadId, `读取 Session 失败：${errMsg(error)}`);
+    return;
+  }
+  if (!keyboard) {
+    await deps.reply(input.chatId, input.threadId, strings(input.locale).sessionsNoWorkspace);
+    return;
+  }
+  await deps.reply(input.chatId, input.threadId, keyboard.header, {
+    parseMode: "HTML",
+    inlineKeyboard: keyboard.rows,
+  });
+}
+
+/** Re-renders a /model page as a fresh message (model_switch "page" callback).
+ *  See renderSessionsPage for the known in-place-edit limitation. */
+export async function renderModelsPage(
+  deps: DispatcherDeps,
+  input: {
+    chatId: number;
+    threadId: number;
+    userId: number;
+    page: number;
+    locale: Locale;
+  },
+): Promise<void> {
+  const meta: CommandMeta = {
+    user: { telegramUserId: input.userId } as TelegramUser,
+    chatId: input.chatId,
+    threadId: input.threadId,
+    locale: input.locale,
+  };
+  let keyboard: { header: string; rows: InlineKeyboardRows } | null;
+  try {
+    keyboard = await buildModelsKeyboard(deps, meta, input.page);
+  } catch (error) {
+    await deps.reply(input.chatId, input.threadId, `读取模型失败：${errMsg(error)}`);
+    return;
+  }
+  if (!keyboard) {
+    await deps.reply(input.chatId, input.threadId, strings(input.locale).sessionsNoWorkspace);
+    return;
+  }
+  await deps.reply(input.chatId, input.threadId, keyboard.header, {
+    parseMode: "HTML",
+    inlineKeyboard: keyboard.rows,
   });
 }
 

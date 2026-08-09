@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { piEnv } from "@/lib/env";
 
 export const PI_WEB_AUTH_USERNAME = "pi";
 
@@ -11,14 +12,14 @@ function secretsEqual(actual: string, expected: string): boolean {
 }
 
 export function isWebPasswordEnabled(
-  password: string | undefined = process.env.PI_WEB_PASSWORD,
+  password: string | undefined = piEnv("PASSWORD"),
 ): password is string {
   return typeof password === "string" && password.length > 0;
 }
 
 export function isValidBasicAuthorization(
   authorization: string | null,
-  password = process.env.PI_WEB_PASSWORD,
+  password = piEnv("PASSWORD"),
 ): boolean {
   if (!isWebPasswordEnabled(password) || !authorization) return false;
 
