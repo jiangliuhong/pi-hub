@@ -71,6 +71,34 @@ $env:NO_PROXY = "localhost,127.0.0.1"
 npx @jarome/pi-hub@latest
 ```
 
+## Pi Hub extensions
+
+Pi Hub extends the original Pi Web session workspace with Telegram integration and scheduled task execution. The related implementation can be found in `modules/scheduler/`, `modules/telegram/`, `app/api/scheduler/`, and `app/api/integrations/telegram/`.
+
+### Scheduled tasks
+
+Open **Tasks** from the sidebar, choose a working directory, enter the Agent instruction, and configure when it should run:
+
+- **Daily**: repeat at a selected time and time zone;
+- **Once**: run once at a specific date and time;
+- **Resume an existing session**: use resume mode to continue an existing session instead of creating a new one, which is useful for scheduled follow-ups to a long-running task.
+
+The task page previews the next execution time in both the selected time zone and UTC so that the schedule can be checked before saving it.
+
+![Pi Hub scheduled task configuration](./docs/screenshots/task-scheduler.png)
+
+### Telegram integration
+
+Pi Hub can store a Telegram Bot Token and use either the official Telegram Bot API service or a self-hosted Bot API Server. After configuration, user pairing and session mapping can connect Telegram users to Pi Hub sessions so that an Agent session can be continued from Telegram.
+
+When a scheduled task runs, Pi Hub can send Telegram notifications for task start, success, failure, and deferred retries. Notifications include the task details and session identifier so that the session can be located and operated again.
+
+![Pi Hub Telegram integration configuration](./docs/screenshots/telegram-integration.png)
+
+Use the TG entry in the main interface to check the Telegram integration status. After a task finishes, the notification entry also shows its execution result.
+
+![Pi Hub task execution result notification](./docs/screenshots/pi-hub-task-notification.png)
+
 ## Features
 
 - **Pick work back up**: browse previous pi conversations by project without digging through terminal history or session paths.

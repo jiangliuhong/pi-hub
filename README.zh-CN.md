@@ -69,6 +69,34 @@ $env:NO_PROXY = "localhost,127.0.0.1"
 npx @jarome/pi-hub@latest
 ```
 
+## Pi Hub 扩展功能
+
+Pi Hub 在原有 Pi Web 会话管理和浏览器工作区的基础上，增加了 Telegram 集成和定时任务调度能力。相关实现可以在源码中的 `modules/scheduler/`、`modules/telegram/`、`app/api/scheduler/` 和 `app/api/integrations/telegram/` 目录查看。
+
+### 定时任务调度
+
+从侧边栏进入“任务”，可以为任务选择工作目录并填写要执行的 Agent 指令，然后配置调度方式：
+
+- **每日**：在指定时间、指定时区重复执行；
+- **一次性**：在指定的时间点执行一次；
+- **继续已有会话**：选择恢复模式后，任务会基于已有 session 继续执行，而不是创建全新的会话，适合定时跟进某个长期任务。
+
+任务页面会显示下一次执行时间的预览，并同时展示所选时区和对应的 UTC 时间，方便确认调度是否正确。
+
+![Pi Hub 定时任务配置](./docs/screenshots/task-scheduler.png)
+
+### Telegram 集成
+
+在 Pi Hub 中可以配置 Telegram Bot Token，并选择 Telegram 官方 Bot API 服务或自建 Bot API Server。配置完成后，可以通过用户配对和会话映射，将 Telegram 用户与 Pi Hub 中的会话关联起来，从 Telegram 继续操作对应的 Agent session。
+
+定时任务执行时，Pi Hub 可以通过 Telegram 发送任务开始、执行成功、执行失败或延迟重试等通知；通知中会带上任务信息和 session 标识，便于继续查看或操作。
+
+![Pi Hub Telegram 集成配置](./docs/screenshots/telegram-integration.png)
+
+在主界面的 TG 入口可以查看 Telegram 集成状态；任务结束后也可以从界面中的通知入口确认执行结果。
+
+![Pi Hub 任务执行结果通知](./docs/screenshots/pi-hub-task-notification.png)
+
 ## 功能介绍
 
 - **把历史工作接回来**：打开网页就能按项目找到以前的 pi 对话，不必在终端里翻文件或记住会话路径。

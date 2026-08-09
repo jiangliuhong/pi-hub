@@ -71,6 +71,34 @@ $env:NO_PROXY = "localhost,127.0.0.1"
 npx @jarome/pi-hub@latest
 ```
 
+## Pi Hub の拡張機能
+
+Pi Hub は、従来の Pi Web のセッション管理とブラウザワークスペースに、Telegram 連携とスケジュール実行機能を追加しています。関連する実装は `modules/scheduler/`、`modules/telegram/`、`app/api/scheduler/`、`app/api/integrations/telegram/` にあります。
+
+### スケジュールタスク
+
+サイドバーの「タスク」から、作業ディレクトリと Agent の指示を設定し、実行方法を選択できます。
+
+- **毎日**：指定した時刻とタイムゾーンで繰り返し実行します。
+- **一度だけ**：指定した日時に一度だけ実行します。
+- **既存セッションを継続**：復元モードを選ぶと新しいセッションを作成せず、既存のセッションから続行できます。長期タスクの定期的なフォローアップに便利です。
+
+タスク画面では、保存前に次回実行時刻を選択したタイムゾーンと UTC の両方で確認できます。
+
+![Pi Hub のスケジュールタスク設定](./docs/screenshots/task-scheduler.png)
+
+### Telegram 連携
+
+Pi Hub では Telegram Bot Token を設定し、Telegram 公式 Bot API または自前の Bot API Server を選択できます。ユーザーのペアリングとセッションマッピングを設定すると、Telegram ユーザーを Pi Hub のセッションに関連付け、Telegram から Agent セッションを継続できます。
+
+スケジュールタスクの開始、成功、失敗、遅延リトライなどの状態は Telegram に通知できます。通知にはタスク情報とセッション ID が含まれるため、あとから対象セッションを確認して操作できます。
+
+![Pi Hub の Telegram 連携設定](./docs/screenshots/telegram-integration.png)
+
+メイン画面の TG エントリから Telegram 連携の状態を確認できます。タスク終了後は通知エントリから実行結果も確認できます。
+
+![Pi Hub のタスク実行結果通知](./docs/screenshots/pi-hub-task-notification.png)
+
 ## 機能
 
 - **作業をすぐに再開**：セッションのパスやターミナル履歴を探さずに、プロジェクトごとに過去の pi の会話を閲覧できます。
