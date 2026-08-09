@@ -99,6 +99,8 @@ export async function routeCallbackQuery(
       return handleTaskRun(deps, input, result.action.payload, auth.user.role);
     case "abort":
       return handleAbort(deps, input, auth.user.telegramUserId, auth.user.role === "owner");
+    case "workspace_switch":
+      return handleWorkspaceSwitch(deps, input, result.action.payload);
     default:
       // Other action types (session_switch, abort, …) arrive in phase 3.
       await deps.answerCallback(input.callbackQueryId, s.featureNotReady);
@@ -158,4 +160,38 @@ async function handleTaskRun(
     await deps.answerCallback(input.callbackQueryId, `执行失败：${message}`, true);
     return { handled: false, reason: "trigger_failed" };
   }
+}
+
+async function handleWorkspaceSwitch(
+  deps: CallbackDeps,
+  input: CallbackInput,
+  payload: Record<string, unknown>,
+): Promise<CallbackResult> {
+  const s = strings(input.locale);
+  const workspace = typeof payload.workspace === "string" ? payload.workspace : null;
+  const name = typeof payload.name === "string" ? payload.name : (workspace ?? "");
+  if (!workspace) {
+    await deps.answerCallback(input.callbackQueryId, s.featureNotReady, true);
+    return { handled: false, reason: "no_workspace" };
+  }
+  const threadId = input.threadId ?? 0;
+  const existing = deps.store.getConversation(input.chatId, threadId);
+  if (existing) {
+    deps.store.updateConversation(input.chatId, threadId, { workspace });
+  } else {
+    // First interaction: no conversation row yet (e.g. user picks a workspace
+    // before ever sending a prompt). Create one so the choice sticks.
+    deps.store.upsertConversation({
+      chatId: input.chatId,
+      threadId,
+      ownerUserId: input.userId,
+      workspace,
+      locale: input.locale,
+    });
+  }
+  await deps.answerCallback(input.callbackQueryId, s.workspaceSwitched(name));
+  // Send a chat message so the user sees what to do next (the callback toast is
+  // ephemeral; this makes the chosen workspace + next step visible inline).
+  await deps.reply(input.chatId, input.threadId, s.workspaceReady(name));
+  return { handled: true };
 }

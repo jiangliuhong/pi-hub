@@ -32,6 +32,7 @@ import {
   verifyPairingCode,
 } from "./telegram-pairing";
 import { routeCallbackQuery } from "./telegram-callback-router";
+import { ActionService } from "./telegram-actions";
 import type { InlineKeyboardRows } from "./telegram-outbox";
 import type { TelegramPromptRunner } from "./telegram-prompt-runner";
 import type { TaskService, TaskDefinition } from "@/modules/scheduler";
@@ -56,6 +57,8 @@ interface DispatcherDeps {
   resolveScheduler: () => TaskService | null;
   /** Lazily resolves the prompt runner (null until the bot/transport is up). */
   getRunner: () => TelegramPromptRunner | null;
+  /** Lists known workspaces (recent project roots derived from sessions). */
+  listWorkspaces: () => Promise<{ path: string; name: string }[]>;
   /** Resolves the bot username (for /start). */
   botUsername: () => string | null;
 }
@@ -328,6 +331,10 @@ async function handleAuthedCommand(
       await handleNew(meta, deps);
       return;
     }
+    case "workspace": {
+      await handleWorkspace(meta, deps);
+      return;
+    }
     case "sessions": {
       await deps.reply(meta.chatId, meta.threadId, s.featureNotReady);
       return;
@@ -462,7 +469,8 @@ async function handleNew(
   }
   // V1: rebind to a fresh session by clearing the active mapping, then prompt
   // with an empty-ish seed so the runner creates a new session. The runner's
-  // workspace resolver picks the configured default workspace.
+  // workspace resolver uses the conversation's selected workspace (set via
+  // /workspace); if none is selected, the prompt will guide the user.
   if (meta.user.role === "viewer") {
     await deps.reply(meta.chatId, meta.threadId, "权限不足：需要 operator 或 owner。");
     return;
@@ -477,6 +485,50 @@ async function handleNew(
     });
   }
   await deps.reply(meta.chatId, meta.threadId, "✅ 已准备新 Session。请发送你的 Prompt。", { parseMode: "HTML" });
+}
+
+async function handleWorkspace(
+  meta: { user: TelegramUser; chatId: number; threadId: number | undefined; locale: Locale },
+  deps: DispatcherDeps,
+): Promise<void> {
+  const s = strings(meta.locale);
+  if (meta.user.role === "viewer") {
+    await deps.reply(meta.chatId, meta.threadId, "权限不足：需要 operator 或 owner。");
+    return;
+  }
+  let workspaces: { path: string; name: string }[];
+  try {
+    workspaces = await deps.listWorkspaces();
+  } catch (error) {
+    await deps.reply(meta.chatId, meta.threadId, `读取工作区失败：${errMsg(error)}`);
+    return;
+  }
+  if (workspaces.length === 0) {
+    await deps.reply(meta.chatId, meta.threadId, s.workspaceEmpty);
+    return;
+  }
+  const conv = deps.store.getConversation(meta.chatId, meta.threadId ?? 0);
+  const current = conv?.workspace ?? null;
+  const actions = new ActionService(deps.store);
+  const rows: InlineKeyboardRows = workspaces.map((ws) => {
+    const { callbackData } = actions.create({
+      actionType: "workspace_switch",
+      payload: { workspace: ws.path, name: ws.name },
+      userId: meta.user.telegramUserId,
+      chatId: meta.chatId,
+      threadId: meta.threadId ?? 0,
+    });
+    const prefix = current && current === ws.path ? "✅ " : "";
+    return [{ text: `${prefix}${ws.name}`, callbackData }];
+  });
+  const header = [
+    `<b>${esc(s.workspaceHeader)}</b>`,
+    `当前：<code>${esc(current ?? "—")}</code>`,
+  ].join("\n");
+  await deps.reply(meta.chatId, meta.threadId, header, {
+    parseMode: "HTML",
+    inlineKeyboard: rows,
+  });
 }
 
 // ---------------------------------------------------------------------------

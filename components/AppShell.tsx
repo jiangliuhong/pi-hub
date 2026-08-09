@@ -606,7 +606,7 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
-  const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
+  const windowTitle = activeCwdName ? `${activeCwdName} - Pi Hub` : "Pi Hub";
 
   useEffect(() => {
     const syncWindowTitle = () => {
@@ -638,7 +638,17 @@ export function AppShell() {
         onAtMention={handleAtMention}
         onAtMentions={handleAtMentions}
       />
-      <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
+      <div
+        className="sidebar-utility-nav"
+        style={{
+          padding: "8px 10px 10px",
+          flexShrink: 0,
+          display: "grid",
+          gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+          gap: 4,
+          borderTop: "1px solid var(--border)",
+        }}
+      >
         {([
           {
              label: translate("common.models"),
@@ -691,7 +701,7 @@ export function AppShell() {
             ),
           },
           {
-             label: translate("common.telegram"),
+             label: translate("common.telegramShort"),
             onClick: () => setTelegramOpen(true),
             disabled: false,
             icon: (
@@ -707,17 +717,23 @@ export function AppShell() {
             disabled={disabled}
             title={label}
             style={{
-              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              height: 32, padding: 0, background: "none", border: "none",
+              minWidth: 0,
+              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+              height: 46, padding: "4px 2px", background: "none", border: "none",
               borderRadius: 9, color: "var(--text-muted)", cursor: disabled ? "default" : "pointer",
-              fontSize: 12, opacity: disabled ? 0.35 : 1,
+              fontSize: 11, lineHeight: 1.1, whiteSpace: "nowrap", overflow: "hidden",
+              opacity: disabled ? 0.35 : 1,
               transition: "background 0.12s, color 0.12s",
             }}
             onMouseEnter={(e) => { if (!disabled) { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; } }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
           >
-            {icon}
-            {label}
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 16, flexShrink: 0 }}>
+              {icon}
+            </span>
+            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {label}
+            </span>
           </button>
         ))}
       </div>
@@ -825,7 +841,7 @@ export function AppShell() {
       <div
         ref={sidebarResizer.panelRef}
         id="session-sidebar"
-        className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${sidebarResizer.isResizing ? " sidebar-resizing" : ""}`}
+        className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}${sidebarResizer.isResizing ? " sidebar-resizing" : ""}${sidebarResizer.isReady ? "" : " sidebar-not-ready"}`}
         style={{
           "--sidebar-width": `${sidebarResizer.width}px`,
           background: "var(--bg-panel)",

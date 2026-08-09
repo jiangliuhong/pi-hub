@@ -24,6 +24,10 @@ interface Strings {
   rateLimited: string;
   featureNotReady: string;
   callbackExpired: string;
+  workspaceHeader: string;
+  workspaceEmpty: string;
+  workspaceSwitched: (name: string) => string;
+  workspaceReady: (name: string) => string;
 }
 
 const ZH_CN: Strings = {
@@ -40,6 +44,7 @@ const ZH_CN: Strings = {
     "/status — 查看 Pi Hub 状态",
     "/session — 查看当前 Session",
     "/new — 创建新 Session",
+    "/workspace — 切换工作区",
     "/sessions — 浏览历史 Session",
     "/abort — 停止当前执行",
     "/retry — 重试上一次 Prompt",
@@ -62,6 +67,10 @@ const ZH_CN: Strings = {
   rateLimited: "请求过于频繁，请稍后再试。",
   featureNotReady: "该功能将在后续版本提供。",
   callbackExpired: "该按钮已过期，请重新打开菜单。",
+  workspaceHeader: "选择工作区（点击切换）：",
+  workspaceEmpty: "暂无可用工作区。请先在 Pi Hub 网页端创建一个 Session，然后重试。",
+  workspaceSwitched: (name: string) => `✅ 已切换工作区：${name}`,
+  workspaceReady: (name: string) => `已切换到工作区「${name}」。现在可以直接发送你的 Prompt 开始对话。`,
 };
 
 const EN: Strings = {
@@ -78,6 +87,7 @@ const EN: Strings = {
     "/status — show Pi Hub status",
     "/session — show current session",
     "/new — create a new session",
+    "/workspace — switch workspace",
     "/sessions — browse sessions",
     "/abort — stop the current run",
     "/retry — retry the last prompt",
@@ -99,6 +109,10 @@ const EN: Strings = {
   rateLimited: "Too many requests. Please slow down.",
   featureNotReady: "This feature will arrive in a later release.",
   callbackExpired: "This button has expired. Please reopen the menu.",
+  workspaceHeader: "Select a workspace (tap to switch):",
+  workspaceEmpty: "No workspaces available. Create a session in Pi Hub Web first, then retry.",
+  workspaceSwitched: (name: string) => `✅ Switched workspace: ${name}`,
+  workspaceReady: (name: string) => `Switched to workspace "${name}". You can now send your prompt to start.`,
 };
 
 const CATALOGS: Record<Locale, Strings> = {
@@ -138,6 +152,7 @@ export function commandList(locale: Locale): { command: string; description: str
       { command: "status", description: "Show Pi Hub status" },
       { command: "session", description: "Show current session" },
       { command: "new", description: "Create a new session" },
+      { command: "workspace", description: "Switch workspace" },
       { command: "sessions", description: "Browse sessions" },
       { command: "abort", description: "Stop the current run" },
       { command: "retry", description: "Retry the last prompt" },
@@ -153,6 +168,7 @@ export function commandList(locale: Locale): { command: string; description: str
     { command: "status", description: "查看 Pi Hub 状态" },
     { command: "session", description: "查看当前 Session" },
     { command: "new", description: "创建新 Session" },
+    { command: "workspace", description: "切换工作区" },
     { command: "sessions", description: "浏览历史 Session" },
     { command: "abort", description: "停止当前执行" },
     { command: "retry", description: "重试上一次 Prompt" },

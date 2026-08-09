@@ -12,6 +12,7 @@ export const enLocale: LocalePlugin = {
     "common.plugins": "Plugins",
     "common.tasks": "Tasks",
     "common.telegram": "Telegram",
+    "common.telegramShort": "TG",
     "common.integrations": "Integrations",
     "sidebar.hide": "Hide sidebar",
     "sidebar.show": "Show sidebar",

@@ -934,6 +934,11 @@ span.linenumber {
   .sidebar-container.sidebar-resizing > * {
     transition: none !important;
   }
+  /* Restore a persisted width before enabling the open/close transition. */
+  .sidebar-container.sidebar-not-ready,
+  .sidebar-container.sidebar-not-ready > * {
+    transition: none !important;
+  }
 }
 
 /* Wide desktop file panel: participate in the split layout. */

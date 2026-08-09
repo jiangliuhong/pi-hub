@@ -116,7 +116,7 @@ export class TelegramPromptRunner {
     // 1. Workspace.
     const workspace = await this.deps.resolveWorkspace(input.chatId, input.threadId, input.userId);
     if (!workspace) {
-      return { ok: false, error: "未配置工作区。请在 Pi Hub 网页端设置默认工作区。" };
+      return { ok: false, error: "尚未选择工作区。请发送 /workspace 选择一个工作区后再试。" };
     }
 
     // 2. Ensure conversation row (busy check inside).

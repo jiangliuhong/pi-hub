@@ -75,6 +75,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
   const restoredRef = useRef(false);
   const [width, setWidth] = useState(defaultWidth);
   const [isResizing, setIsResizing] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
   const effectiveMaxWidth = useCallback(
     () => Math.min(maxWidth, Math.max(minWidth, getMaxWidth())),
@@ -217,6 +218,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
     if (storedWidth !== null && storedWidth !== restoredWidth) {
       writeStoredWidth(storageKey, restoredWidth);
     }
+    setIsReady(true);
   }, [commitWidth, defaultWidth, getDefaultWidth, storageKey]);
 
   useEffect(() => {
@@ -257,6 +259,7 @@ export function useResizablePanel(options: UseResizablePanelOptions) {
   }, [restoreBodyState]);
 
   return {
+    isReady,
     isResizing,
     panelRef,
     reclampWidth,

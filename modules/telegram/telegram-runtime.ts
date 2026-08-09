@@ -162,7 +162,16 @@ export class TelegramRuntime {
 
     // Attempt to bring the bot up. Failures are recorded into status.
     if (!settings.enabled) {
+      // Token may be configured but the integration switch is off — this is
+      // the #1 silent "bot doesn't respond" cause. Surface it explicitly so it
+      // can be told apart from a real error (errorCode stays null since this
+      // is a user choice, not a fault).
       this.setRuntimeStatus("disabled", null, null);
+      console.info(
+        `[pi-hub:telegram] disabled: integration switch is off${
+          resolved.token ? " (token is configured)" : " (no token configured)"
+        }`,
+      );
     } else if (!resolved.token) {
       this.setRuntimeStatus(
         "disabled",
@@ -247,6 +256,11 @@ export class TelegramRuntime {
 
     if (!settings.enabled) {
       this.setRuntimeStatus("disabled", null, null);
+      console.info(
+        `[pi-hub:telegram] disabled: integration switch is off${
+          resolved.token ? " (token is configured)" : " (no token configured)"
+        }`,
+      );
       return;
     }
     if (!resolved.token) {
@@ -329,6 +343,12 @@ export class TelegramRuntime {
       }
       inner.polling = false;
       this.setRuntimeStatus("standby", null, null);
+    } else if (!wasLeader && inner.leader) {
+      // Promoted from standby to leader — start polling now. This happens when
+      // the runtime started before the lease was available (e.g. another
+      // process held it) and later acquired it via renewal.
+      console.info("[pi-hub:telegram] acquired leader lease, starting polling");
+      void this.tryStartPolling(false);
     }
   }
 
@@ -611,6 +631,34 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
             }
           },
           resolveScheduler,
+          listWorkspaces: async () => {
+            try {
+              const { listAllSessions } = await import("@/lib/session-reader");
+              const sessions = await listAllSessions();
+              // Dedup by projectRoot (worktrees fold back to the main repo),
+              // keep the most-recently-modified per project, then sort by that.
+              const byRoot = new Map<string, number>(); // projectRoot -> latest modified (ms)
+              for (const s of sessions) {
+                if (!s.projectRoot) continue;
+                const modifiedMs = Date.parse(s.modified);
+                if (Number.isNaN(modifiedMs)) continue;
+                const prev = byRoot.get(s.projectRoot);
+                if (prev === undefined || modifiedMs > prev) byRoot.set(s.projectRoot, modifiedMs);
+              }
+              return [...byRoot.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .map(([root]) => ({
+                  path: root,
+                  name: root.split("/").filter(Boolean).pop() ?? root,
+                }));
+            } catch (error) {
+              console.warn(
+                "[pi-hub:telegram] listWorkspaces failed",
+                error instanceof Error ? error.message : error,
+              );
+              return [];
+            }
+          },
           getRunner: () => {
             const inner = (runtime as unknown as { inner: RuntimeInternals | null }).inner;
             const transport = inner?.transport ?? null;
@@ -624,9 +672,11 @@ export async function startTelegramRuntime(): Promise<TelegramRuntime> {
                   const { startRpcSession } = await import("@/lib/rpc-manager");
                   return startRpcSession(sessionId, sessionFile, cwd, options);
                 },
-                resolveWorkspace: async () => {
-                  const s = runtime.getSettings();
-                  return s?.defaultWorkspace ?? null;
+                resolveWorkspace: async (chatId, threadId) => {
+                  // Workspace is chosen per-conversation via /workspace. There is
+                  // no global default fallback — users must explicitly select one.
+                  const conv = store.getConversation(chatId, threadId ?? 0);
+                  return conv?.workspace ?? null;
                 },
               });
             }

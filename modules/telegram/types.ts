@@ -138,6 +138,7 @@ export type TelegramActionType =
   | "task_open"
   | "model_switch"
   | "session_open"
+  | "workspace_switch"
   | "confirm"
   | "cancel"
   | "view_detail";

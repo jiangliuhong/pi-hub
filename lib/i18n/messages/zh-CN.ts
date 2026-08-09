@@ -12,6 +12,7 @@ export const zhCNLocale: LocalePlugin = {
     "common.plugins": "插件",
     "common.tasks": "任务",
     "common.telegram": "Telegram",
+    "common.telegramShort": "TG",
     "common.integrations": "集成",
     "sidebar.hide": "隐藏侧边栏",
     "sidebar.show": "显示侧边栏",

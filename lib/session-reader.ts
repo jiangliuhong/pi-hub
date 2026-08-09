@@ -10,12 +10,26 @@ import type { AgentMessage, SessionEntry, SessionHeader, SessionInfo, SessionCon
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
 import { sessionPathKey } from "./session-path";
+import { getConfiguredSessionDir } from "./session-dir";
 import { resolveProject, type ProjectInfo } from "./worktree";
 
 export { getAgentDir };
 
 async function loadAllSessions(): Promise<SessionInfo[]> {
-  const piSessions: PiSessionInfo[] = await SessionManager.listAll();
+  // Keep the default directory in the scan even when Pi is configured with a
+  // custom sessionDir. This preserves older sessions after a user changes the
+  // Pi setting, while the custom directory covers the active CLI storage.
+  const configuredSessionDir = getConfiguredSessionDir();
+  const [defaultSessions, configuredSessions] = await Promise.all([
+    SessionManager.listAll(),
+    configuredSessionDir ? SessionManager.listAll(configuredSessionDir) : Promise.resolve([]),
+  ]);
+  const seenSessionIds = new Set<string>();
+  const piSessions: PiSessionInfo[] = [...defaultSessions, ...configuredSessions].filter((session) => {
+    if (seenSessionIds.has(session.id)) return false;
+    seenSessionIds.add(session.id);
+    return true;
+  });
   const pathToId = new Map<string, string>();
   for (const s of piSessions) pathToId.set(sessionPathKey(s.path), s.id);
 

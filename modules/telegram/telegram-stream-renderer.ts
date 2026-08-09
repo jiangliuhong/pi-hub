@@ -80,10 +80,17 @@ export class TelegramStreamRenderer {
     this.typingTimer = null;
   }
 
-  /** Accumulates assistant text and schedules a debounced edit. */
-  appendText(delta: string): void {
+  /**
+   * Sets the assistant text from a streaming snapshot and schedules a debounced
+   * edit.
+   *
+   * pi's `message_update` events carry the full accumulated message so far
+   * (not a delta), so we replace rather than append — otherwise the text would
+   * grow on every event and explode into dozens of chunked messages.
+   */
+  appendText(text: string): void {
     if (this.done) return;
-    this.accumulated += delta;
+    this.accumulated = text;
     this.scheduleEdit();
   }
 
@@ -127,19 +134,10 @@ export class TelegramStreamRenderer {
     if (this.done) return;
     const body = this.renderBody(/* running */ true);
     if (this.messageId === null) {
-      // First edit after creation — just update text + keep the stop button.
-      try {
-        await this.deps.transport.editMessageText({
-          chatId: this.deps.chatId,
-          messageId: this.firstMessageId(),
-          text: body,
-          parseMode: "HTML",
-          ...(this.stopButton ? { inlineKeyboard: this.stopButton.rows } : {}),
-        });
-      } catch {
-        // ignore benign "not modified" / transient errors
-      }
-      return;
+      // Lazily create the message on the first flush, then subsequent edits
+      // update it in place. Without this, edits target messageId 0 and no-op.
+      await this.ensureMessageCreated();
+      if (this.messageId === null) return; // creation failed; give up silently
     }
     try {
       await this.deps.transport.editMessageText({
@@ -152,14 +150,6 @@ export class TelegramStreamRenderer {
     } catch {
       // ignore
     }
-  }
-
-  /** Creates the message lazily on the first real text. */
-  private firstMessageId(): number {
-    if (this.messageId !== null) return this.messageId;
-    // Synchronous-ish: we can't await here; instead sendMessage is awaited in
-    // ensureMessageCreated. This path is only hit when messageId is already set.
-    return this.messageId ?? 0;
   }
 
   /** Ensures the Telegram message exists before editing. Call before flush. */
