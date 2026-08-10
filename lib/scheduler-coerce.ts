@@ -22,10 +22,17 @@ export function coerceSchedule(raw: unknown): ScheduleInput {
     type?: unknown;
     time?: unknown;
     localDateTime?: unknown;
+    cronExpression?: unknown;
     timezone?: unknown;
   };
-  if (s.type !== "daily" && s.type !== "once") {
-    throw validationError('schedule.type must be "daily" or "once"');
+  if (
+    s.type !== "daily" &&
+    s.type !== "cron" &&
+    s.type !== "once"
+  ) {
+    throw validationError(
+      'schedule.type must be "daily", "cron", or "once"',
+    );
   }
   if (typeof s.timezone !== "string") {
     throw validationError("schedule.timezone is required");
@@ -35,6 +42,18 @@ export function coerceSchedule(raw: unknown): ScheduleInput {
       throw validationError('schedule.time is required for "daily"');
     }
     return { type: "daily", time: s.time, timezone: s.timezone };
+  }
+  if (s.type === "cron") {
+    if (typeof s.cronExpression !== "string") {
+      throw validationError(
+        'schedule.cronExpression is required for "cron"',
+      );
+    }
+    return {
+      type: "cron",
+      cronExpression: s.cronExpression,
+      timezone: s.timezone,
+    };
   }
   if (typeof s.localDateTime !== "string") {
     throw validationError('schedule.localDateTime is required for "once"');

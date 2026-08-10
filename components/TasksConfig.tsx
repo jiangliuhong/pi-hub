@@ -13,9 +13,10 @@
  * Extension rules: AGENTS.local.md (extend, don't modify upstream).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
+import { useTheme } from "@/hooks/useTheme";
 import { displayCwd, getRecentProjects } from "@/lib/projects";
 import type { SessionInfo } from "@/lib/types";
 import {
@@ -29,6 +30,7 @@ import {
   triggerRun,
   updateTask,
   type CreateTaskPayload,
+  type PreviewResultDto,
   type ResumeTargetDto,
   type RetryOnRateLimitDto,
   type RunSummaryDto,
@@ -63,7 +65,36 @@ const inputStyle: React.CSSProperties = {
   outline: "none",
   width: "100%",
   boxSizing: "border-box",
+  // Let native radio/checkbox/range follow the app accent color so they do
+  // not clash with the CSS-variable theme in dark mode.
+  accentColor: "var(--accent)",
 };
+
+/** Shared max content width so dashboard / form / detail views stay aligned. */
+const VIEW_MAX_WIDTH = 680;
+
+/**
+ * Local-time string in the format <input type="datetime-local"> expects
+ * (YYYY-MM-DDTHH:mm, no timezone suffix). Used as a safe default so the
+ * submitted value matches the displayed timezone instead of being derived
+ * from UTC (which would shift the run by the local offset).
+ */
+function nowLocalDateTimeInput(): string {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
+}
+
+/** Best-effort detection of the browser's IANA timezone for the picker. */
+function detectSystemTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -164,6 +195,27 @@ function formatDateTime(iso: string | null): string {
   )}:${pad(d.getMinutes())}`;
 }
 
+/** Formats an ISO instant in a specific IANA timezone (client-side, display only). */
+function formatZonedDateTime(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour12: false,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("month")}-${get("day")} ${hour}:${get("minute")}`;
+  } catch {
+    return formatDateTime(iso);
+  }
+}
+
 function formatRelativeNext(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -184,6 +236,21 @@ function formatDuration(ms: number | null): string | null {
   const s = totalSec % 60;
   if (m === 0) return `${s}s`;
   return `${m}m${s.toString().padStart(2, "0")}s`;
+}
+
+/** Human-readable schedule label for list/detail views (daily / cron / once). */
+function scheduleLabel(
+  task: TaskDto,
+  t: (key: string) => string,
+): string {
+  const s = task.schedule;
+  if (s.type === "daily") {
+    return `${t("task.type.everyDay")} ${s.time ?? ""}`;
+  }
+  if (s.type === "cron") {
+    return `${t("task.type.cron")}: ${s.cronExpression ?? ""}`;
+  }
+  return `${t("task.type.oneTime")} ${s.localDateTime ?? ""}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +280,10 @@ export function TasksConfig({
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Whether the new/edit form has unsaved edits, and whether a close attempt
+  // is currently pending confirmation.
+  const [formDirty, setFormDirty] = useState(false);
+  const [pendingClose, setPendingClose] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -265,12 +336,23 @@ export function TasksConfig({
   }, [refresh]);
 
   // Poll every 5s while a run is active so the UI reflects progress.
+  // Pause while a row menu or delete confirmation is open so the list does
+  // not re-render (and potentially reorder) mid-interaction.
   useEffect(() => {
     const hasActiveRun = scheduler ? scheduler.runningRuns > 0 : false;
     if (!hasActiveRun) return;
+    if (openMenuId !== null || deleteConfirmId !== null) return;
     const id = setInterval(() => void refresh(), 5000);
     return () => clearInterval(id);
-  }, [scheduler, refresh]);
+  }, [scheduler, refresh, openMenuId, deleteConfirmId]);
+
+  // Reset transient form state when the active view changes so dirty / pending
+  // flags from a previous CreateTaskView instance cannot leak into the next
+  // view (e.g. after a successful create/edit jumps to detail).
+  useEffect(() => {
+    setFormDirty(false);
+    setPendingClose(false);
+  }, [view]);
 
   // ----- API-backed mutations -----
 
@@ -309,7 +391,7 @@ export function TasksConfig({
     setOpenMenuId(null);
     try {
       await createTask({
-        name: `${task.name} (copy)`,
+        name: `${task.name}${t("task.action.copySuffix")}`,
         cwd: task.cwd,
         prompt: task.prompt,
         schedule: task.schedule,
@@ -356,6 +438,30 @@ export function TasksConfig({
     }
   }
 
+  // Close gating: while editing a task with unsaved changes, route close
+  // attempts (background click, header ×, Escape) through a confirmation
+  // dialog instead of discarding input silently.
+  function handleCloseAttempt() {
+    if (formDirty && (view.name === "new" || view.name === "edit")) {
+      setPendingClose(true);
+    } else {
+      onClose();
+    }
+  }
+
+  // Escape dismisses the unsaved-changes dialog first, otherwise it attempts
+  // to close the whole modal (subject to the dirty guard above).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (pendingClose) setPendingClose(false);
+      else handleCloseAttempt();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formDirty, view, pendingClose]);
+
   return (
     <div
       style={{
@@ -368,7 +474,7 @@ export function TasksConfig({
         justifyContent: "center",
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) handleCloseAttempt();
       }}
     >
       <div
@@ -390,10 +496,10 @@ export function TasksConfig({
           title={t("task.title")}
           showBack={view.name !== "dashboard"}
           onBack={() => setView({ name: "dashboard" })}
-          onClose={onClose}
+          onClose={handleCloseAttempt}
         />
 
-        {error && (
+        {error && view.name !== "new" && view.name !== "edit" && (
           <div
             style={{
               padding: "8px 18px",
@@ -459,6 +565,8 @@ export function TasksConfig({
               defaultCwd={activeCwd ?? undefined}
               onCancel={() => setView({ name: "dashboard" })}
               onCreate={handleCreate}
+              onDirtyChange={setFormDirty}
+              error={error}
             />
           ) : view.name === "edit" ? (
             <CreateTaskView
@@ -469,6 +577,8 @@ export function TasksConfig({
               sessions={sessions}
               onCancel={() => setView({ name: "detail", task: view.task })}
               onSave={(payload) => handleUpdate(view.task, payload)}
+              onDirtyChange={setFormDirty}
+              error={error}
             />
           ) : view.name === "detail" ? (
             <DetailView
@@ -481,6 +591,20 @@ export function TasksConfig({
             <RunsView task={view.task} />
           )}
         </div>
+
+        {pendingClose && (
+          <UnsavedConfirmDialog
+            title={t("task.unsaved.title")}
+            body={t("task.unsaved.body")}
+            discardLabel={t("task.unsaved.discard")}
+            keepLabel={t("task.unsaved.keep")}
+            onDiscard={() => {
+              setPendingClose(false);
+              onClose();
+            }}
+            onKeep={() => setPendingClose(false)}
+          />
+        )}
       </div>
     </div>
   );
@@ -501,31 +625,44 @@ function Header({
   onBack: () => void;
   onClose: () => void;
 }) {
+  const iconBtn: React.CSSProperties = {
+    background: "none",
+    border: "none",
+    color: "var(--text-muted)",
+    cursor: "pointer",
+    lineHeight: 1,
+    padding: "5px 9px",
+    minWidth: 30,
+    minHeight: 30,
+    borderRadius: 6,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "12px 18px",
+        padding: "10px 14px",
         borderBottom: "1px solid var(--border)",
         flexShrink: 0,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {showBack && (
           <button
+            type="button"
             onClick={onBack}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 16,
-              padding: "2px 6px",
-              marginRight: 2,
+            aria-label="Back"
+            style={{ ...iconBtn, fontSize: 18, marginRight: 2 }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
             }}
-            title="Back"
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "none";
+            }}
           >
             ‹
           </button>
@@ -535,15 +672,15 @@ function Header({
         </span>
       </div>
       <button
+        type="button"
         onClick={onClose}
-        style={{
-          background: "none",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 20,
-          lineHeight: 1,
-          padding: "2px 6px",
+        aria-label="Close"
+        style={{ ...iconBtn, fontSize: 22 }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--bg-hover)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "none";
         }}
       >
         ×
@@ -790,10 +927,20 @@ function TaskRow({
   onCancelDelete: () => void;
 }) {
   const { t } = useI18n();
-  const scheduleLabel =
-    task.schedule.type === "daily"
-      ? `${t("task.type.everyDay")} ${task.schedule.time ?? ""}`
-      : t("task.type.oneTime");
+  const label = scheduleLabel(task, t);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Close the action dropdown when clicking outside of it (it otherwise only
+  // closes by re-clicking the trigger or picking an item).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onToggleMenu(); // currently open -> toggles to closed
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuOpen, onToggleMenu]);
 
   return (
     <div
@@ -817,8 +964,8 @@ function TaskRow({
               {task.name}
             </span>
           </div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-            {scheduleLabel} · {task.schedule.timezone}
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2, fontFamily: task.schedule.type === "cron" ? "var(--font-mono)" : "inherit" }}>
+            {label} · {task.schedule.timezone}
           </div>
           <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
             {task.status === "completed"
@@ -827,11 +974,14 @@ function TaskRow({
           </div>
         </div>
 
-        <div style={{ position: "relative", flexShrink: 0 }}>
+        <div ref={menuRef} style={{ position: "relative", flexShrink: 0 }}>
           <button
+            type="button"
             onClick={onToggleMenu}
             disabled={busy}
-            title={t("task.column.actions")}
+            aria-label={t("task.column.actions")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             style={{
               background: "none",
               border: "none",
@@ -919,23 +1069,29 @@ function MenuItem({
   danger?: boolean;
 }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
         padding: "7px 12px",
         fontSize: 12,
         color: danger ? "#ef4444" : "var(--text)",
         cursor: "pointer",
+        background: "none",
+        border: "none",
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = "var(--bg-hover)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "none";
+        e.currentTarget.style.background = "transparent";
       }}
     >
       {label}
-    </div>
+    </button>
   );
 }
 
@@ -952,6 +1108,8 @@ function CreateTaskView({
   onCancel,
   onCreate,
   onSave,
+  onDirtyChange,
+  error,
 }: {
   editing?: TaskDto;
   workspaces: string[];
@@ -961,17 +1119,29 @@ function CreateTaskView({
   onCancel: () => void;
   onCreate?: (payload: CreateTaskPayload) => Promise<void>;
   onSave?: (payload: UpdateTaskPayload) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
+  error?: string | null;
 }) {
   const { t } = useI18n();
+  const { theme } = useTheme();
   const isEditing = Boolean(editing);
+  // Drive native time/datetime-local calendar & clock icons to match the theme
+  // (otherwise they are hard to see in dark mode).
+  const nativeInputTheme: React.CSSProperties = {
+    colorScheme: theme === "dark" ? "dark" : "light",
+  };
 
   const [name, setName] = useState(editing?.name ?? "");
-  const [cwd, setCwd] = useState(editing?.cwd ?? defaultCwd ?? "");
+  const [manualCwd, setManualCwd] = useState(editing?.cwd ?? defaultCwd ?? "");
+  const [cwd, setCwd] = useState(manualCwd);
   const [prompt, setPrompt] = useState(editing?.prompt ?? "");
-  const [scheduleType, setScheduleType] = useState<"daily" | "once">(
+  const [scheduleType, setScheduleType] = useState<"daily" | "cron" | "once">(
     editing?.schedule.type ?? "daily",
   );
   const [time, setTime] = useState(editing?.schedule.time ?? "08:00");
+  const [cronExpression, setCronExpression] = useState(
+    editing?.schedule.cronExpression ?? "*/30 * * * *",
+  );
   const [localDateTime, setLocalDateTime] = useState(
     editing?.schedule.localDateTime ?? "",
   );
@@ -990,9 +1160,21 @@ function CreateTaskView({
   const [notifyFailure, setNotifyFailure] = useState(
     editing?.execution.notifyOnFailure ?? true,
   );
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Auto-expand advanced config when editing a task that already has non-default
+  // advanced settings, so current values are visible without a manual toggle.
+  const hasAdvancedConfig = Boolean(
+    editing &&
+      (editing.execution.provider ||
+        editing.execution.modelId ||
+        editing.execution.thinkingLevel ||
+        (editing.execution.toolNames && editing.execution.toolNames.length > 0) ||
+        editing.execution.notifyOnSuccess ||
+        editing.retryOnRateLimit?.enabled ||
+        editing.resume),
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedConfig);
   const [submitting, setSubmitting] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewResultDto | null>(null);
 
   // Resume mode (continue an existing session, e.g. after a rate-limit hit).
   const [resumeMode, setResumeMode] = useState<boolean>(Boolean(editing?.resume));
@@ -1013,55 +1195,150 @@ function CreateTaskView({
     editing?.retryOnRateLimit?.maxAttempts ?? 3,
   );
 
+  // Known models for the Provider / Model ID suggestion datalist. Advisory
+  // only — the inputs stay free-text so explicit values still work.
+  const [modelOptions, setModelOptions] = useState<
+    { provider: string; id: string }[]
+  >([]);
+  useEffect(() => {
+    let cancelled = false;
+    const cwdForModels = manualCwd || defaultCwd || workspaces[0];
+    if (!cwdForModels) return;
+    fetch(`/api/models?cwd=${encodeURIComponent(cwdForModels)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data || !Array.isArray(data.modelList)) return;
+        setModelOptions(
+          data.modelList.map((m: { provider: string; id: string }) => ({
+            provider: m.provider,
+            id: m.id,
+          })),
+        );
+      })
+      .catch(() => {
+        /* advisory only */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manualCwd, defaultCwd, workspaces]);
+
   const selectedSession = sessions.find((s) => s.id === resumeSessionId);
   // When editing a resume task whose session no longer appears in the loaded
   // list, fall back to the stored sessionFile so the target isn't lost.
   const resumeSessionPath =
     selectedSession?.path ?? editing?.resume?.sessionFile ?? "";
 
-  // Keep cwd in sync with the resumed session (resume mode owns the cwd).
+  // Keep cwd in sync with the resumed session, and restore the manually chosen
+  // cwd when resume mode is turned off (previously the override was sticky).
   useEffect(() => {
     if (resumeMode && selectedSession) {
       setCwd(selectedSession.cwd);
+    } else if (!resumeMode) {
+      setCwd(manualCwd);
     }
-  }, [resumeMode, selectedSession]);
+  }, [resumeMode, selectedSession, manualCwd]);
 
   const AVAILABLE_TOOLS = ["Read", "Bash", "Edit", "Write"];
-  const TIMEZONES = [
-    "Asia/Singapore",
-    "Asia/Shanghai",
-    "Asia/Tokyo",
-    "Europe/London",
-    "America/New_York",
-    "UTC",
-  ];
-
-  const canSubmit = Boolean(
-    name.trim() &&
-      prompt.trim() &&
-      (resumeMode ? Boolean(selectedSession || editing?.resume) : cwd.trim()),
+  // Common timezones, with the browser's detected system timezone surfaced to
+  // the top when it is not already part of the list.
+  const TIMEZONES = Array.from(
+    new Set(
+      [
+        detectSystemTimezone(),
+        "Asia/Singapore",
+        "Asia/Shanghai",
+        "Asia/Hong_Kong",
+        "Asia/Tokyo",
+        "Asia/Kolkata",
+        "Asia/Dubai",
+        "Europe/London",
+        "Europe/Berlin",
+        "America/New_York",
+        "America/Chicago",
+        "America/Los_Angeles",
+        "UTC",
+      ].filter(Boolean) as string[],
+    ),
   );
+
+  const missingName = !name.trim();
+  const missingPrompt = !prompt.trim();
+  const missingCwd = !resumeMode && !cwd.trim();
+  const missingSession = resumeMode && !selectedSession && !editing?.resume;
+  const canSubmit =
+    !missingName && !missingPrompt && !missingCwd && !missingSession;
+  const validationHints = [
+    missingName && t("task.create.missingName"),
+    missingPrompt && t("task.create.missingPrompt"),
+    missingCwd && t("task.create.missingCwd"),
+    missingSession && t("task.create.missingSession"),
+  ].filter(Boolean) as string[];
 
   const scheduleDto: ScheduleDto =
     scheduleType === "daily"
       ? { type: "daily", time, timezone }
-      : { type: "once", localDateTime: localDateTime || new Date().toISOString().slice(0, 16), timezone };
+      : scheduleType === "cron"
+        ? { type: "cron", cronExpression, timezone }
+        : {
+            type: "once",
+            localDateTime: localDateTime || nowLocalDateTimeInput(),
+            timezone,
+          };
 
-  // Live preview of the next run.
+  // Live preview of the next run (debounced so editing the cron expression or
+  // time field does not fire one request per keystroke).
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (previewTimer.current) clearTimeout(previewTimer.current);
     let cancelled = false;
-    previewSchedule(scheduleDto)
-      .then((p) => {
-        if (!cancelled) setPreview(`${p.localDisplay} · ${p.utcDisplay}`);
-      })
-      .catch(() => {
-        if (!cancelled) setPreview(null);
-      });
+    previewTimer.current = setTimeout(() => {
+      previewSchedule(scheduleDto)
+        .then((p) => {
+          if (!cancelled) setPreview(p);
+        })
+        .catch(() => {
+          if (!cancelled) setPreview(null);
+        });
+    }, 350);
     return () => {
       cancelled = true;
+      if (previewTimer.current) clearTimeout(previewTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleType, time, localDateTime, timezone]);
+  }, [scheduleType, time, cronExpression, localDateTime, timezone]);
+
+  // Report unsaved-changes state up so the modal can guard against accidental
+  // close (background click / close button) while editing.
+  const buildSnapshot = () =>
+    JSON.stringify({
+      name,
+      manualCwd,
+      prompt,
+      scheduleType,
+      time,
+      cronExpression,
+      localDateTime,
+      timezone,
+      provider,
+      modelId,
+      thinking,
+      tools,
+      timeoutSeconds,
+      notifySuccess,
+      notifyFailure,
+      resumeMode,
+      resumeSessionId,
+      overrideModel,
+      retryEnabled,
+      retryInterval,
+      retryMaxAttempts,
+    });
+  const [initialSnapshot] = useState(buildSnapshot);
+  const dirty = buildSnapshot() !== initialSnapshot;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   function toggleTool(tool: string) {
     setTools((prev) =>
@@ -1137,7 +1414,7 @@ function CreateTaskView({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 560 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: VIEW_MAX_WIDTH, margin: "0 auto" }}>
       <FormSection>
         <SectionTitle>{t("task.create.name")}</SectionTitle>
         <input
@@ -1159,7 +1436,7 @@ function CreateTaskView({
           <select
             style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
             value={workspaces.includes(cwd) ? cwd : ""}
-            onChange={(e) => setCwd(e.target.value)}
+            onChange={(e) => setManualCwd(e.target.value)}
           >
             {cwd && !workspaces.includes(cwd) ? (
               <option value={cwd}>{displayCwd(cwd, homeDir)}</option>
@@ -1183,7 +1460,7 @@ function CreateTaskView({
             type="checkbox"
             checked={resumeMode}
             onChange={(e) => setResumeMode(e.target.checked)}
-            style={{ cursor: "pointer" }}
+            style={{ cursor: "pointer", accentColor: "var(--accent)" }}
           />
           {t("task.resume.enable")}
         </label>
@@ -1242,11 +1519,16 @@ function CreateTaskView({
 
       <FormSection>
         <SectionTitle>{t("task.create.schedule")}</SectionTitle>
-        <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 16, marginBottom: 10, flexWrap: "wrap" }}>
           <RadioOption
             checked={scheduleType === "daily"}
             onClick={() => setScheduleType("daily")}
             label={t("task.type.everyDay")}
+          />
+          <RadioOption
+            checked={scheduleType === "cron"}
+            onClick={() => setScheduleType("cron")}
+            label={t("task.type.cron")}
           />
           <RadioOption
             checked={scheduleType === "once"}
@@ -1261,7 +1543,7 @@ function CreateTaskView({
               <FieldCaption>{t("task.create.date")}</FieldCaption>
               <input
                 type="datetime-local"
-                style={inputStyle}
+                style={{ ...inputStyle, ...nativeInputTheme }}
                 value={localDateTime}
                 onChange={(e) => setLocalDateTime(e.target.value)}
               />
@@ -1272,10 +1554,25 @@ function CreateTaskView({
               <FieldCaption>{t("task.create.time")}</FieldCaption>
               <input
                 type="time"
-                style={inputStyle}
+                style={{ ...inputStyle, ...nativeInputTheme }}
                 value={time}
                 onChange={(e) => setTime(e.target.value)}
               />
+            </label>
+          )}
+          {scheduleType === "cron" && (
+            <label style={{ ...fieldLabelStyle, flexBasis: "100%" }}>
+              <FieldCaption>{t("task.create.cronExpression")}</FieldCaption>
+              <input
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                value={cronExpression}
+                onChange={(e) => setCronExpression(e.target.value)}
+                placeholder="*/15 9-18 * * 1-5"
+                spellCheck={false}
+              />
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                {t("task.create.cronHint")}
+              </span>
             </label>
           )}
           <label style={fieldLabelStyle}>
@@ -1299,13 +1596,36 @@ function CreateTaskView({
             borderRadius: 6,
             fontSize: 11,
             color: "var(--text-muted)",
-            fontFamily: "var(--font-mono)",
           }}
         >
           <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
             {t("task.create.preview")}
           </div>
-          {preview ?? "—"}
+          {preview ? (
+            <>
+              <div style={{ fontFamily: "var(--font-mono)" }}>{preview.localDisplay}</div>
+              <div style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                {preview.utcDisplay}
+              </div>
+              {preview.nextRuns && preview.nextRuns.length > 1 && (
+                <div style={{ marginTop: 4, color: "var(--text-dim)" }}>
+                  {t("task.create.upcoming")}:
+                  {preview.nextRuns.map((iso) => (
+                    <div key={iso} style={{ fontFamily: "var(--font-mono)" }}>
+                      {formatZonedDateTime(iso, timezone)}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {scheduleType === "cron" && cronExpression.trim() === "* * * * *" && (
+                <div style={{ marginTop: 4, color: "#f59e0b" }}>
+                  {t("task.create.cronEveryMinuteWarn")}
+                </div>
+              )}
+            </>
+          ) : (
+            "—"
+          )}
         </div>
       </FormSection>
 
@@ -1335,11 +1655,23 @@ function CreateTaskView({
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <label style={fieldLabelStyle}>
                 <FieldCaption>Provider</FieldCaption>
-                <input style={inputStyle} value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="default" />
+                <input
+                  style={inputStyle}
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                  placeholder={t("task.create.providerHint")}
+                  list="task-provider-options"
+                />
               </label>
               <label style={fieldLabelStyle}>
                 <FieldCaption>Model ID</FieldCaption>
-                <input style={inputStyle} value={modelId} onChange={(e) => setModelId(e.target.value)} placeholder="default" />
+                <input
+                  style={inputStyle}
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  placeholder={t("task.create.modelHint")}
+                  list="task-model-options"
+                />
               </label>
               <label style={fieldLabelStyle}>
                 <FieldCaption>{t("task.create.thinking")}</FieldCaption>
@@ -1439,18 +1771,57 @@ function CreateTaskView({
         )}
       </FormSection>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 4 }}>
-        <button onClick={onCancel} style={secondaryButtonStyle()}>
-          {t("task.action.back")}
-        </button>
-        <button
-          onClick={handleSubmit}
-          disabled={!canSubmit || submitting}
-          style={primaryButtonStyle(!canSubmit || submitting)}
-        >
-          {submitting ? "…" : isEditing ? t("task.action.edit") : t("task.create.create")}
-        </button>
+      <div
+        style={{
+          position: "sticky",
+          bottom: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          padding: "12px 0 2px",
+          marginTop: 4,
+          background: "var(--bg)",
+          borderTop: "1px solid var(--border)",
+          zIndex: 2,
+        }}
+      >
+        {error && (
+          <div style={{ fontSize: 11, color: "#ef4444", textAlign: "right" }}>
+            {error}
+          </div>
+        )}
+        {validationHints.length > 0 && (
+          <div style={{ fontSize: 11, color: "var(--text-dim)", textAlign: "right" }}>
+            {validationHints.join(" · ")}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onCancel} style={secondaryButtonStyle()}>
+            {t("task.action.back")}
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit || submitting}
+            style={primaryButtonStyle(!canSubmit || submitting)}
+          >
+            {submitting ? "…" : isEditing ? t("task.action.edit") : t("task.create.create")}
+          </button>
+        </div>
       </div>
+
+      {/* Advisory suggestion lists for the free-text Provider / Model inputs. */}
+      <datalist id="task-provider-options">
+        {[...new Set(modelOptions.map((m) => m.provider))].map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+      <datalist id="task-model-options">
+        {modelOptions.map((m) => (
+          <option key={`${m.provider}/${m.id}`} value={m.id}>
+            {m.provider}
+          </option>
+        ))}
+      </datalist>
     </div>
   );
 }
@@ -1493,7 +1864,7 @@ function RadioOption({
 }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "var(--text)" }}>
-      <input type="radio" checked={checked} onChange={onClick} style={{ cursor: "pointer" }} />
+      <input type="radio" checked={checked} onChange={onClick} style={{ cursor: "pointer", accentColor: "var(--accent)" }} />
       {label}
     </label>
   );
@@ -1510,7 +1881,7 @@ function CheckboxOption({
 }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "var(--text)" }}>
-      <input type="checkbox" checked={checked} onChange={onClick} style={{ cursor: "pointer" }} />
+      <input type="checkbox" checked={checked} onChange={onClick} style={{ cursor: "pointer", accentColor: "var(--accent)" }} />
       {label}
     </label>
   );
@@ -1532,13 +1903,10 @@ function DetailView({
   onTogglePause: () => void;
 }) {
   const { t } = useI18n();
-  const scheduleLabel =
-    task.schedule.type === "daily"
-      ? `${t("task.type.everyDay")} ${task.schedule.time ?? ""}`
-      : `${t("task.type.oneTime")} ${task.schedule.localDateTime ?? ""}`;
+  const label = scheduleLabel(task, t);
 
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div style={{ maxWidth: VIEW_MAX_WIDTH, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
         <StatusDot color={TASK_STATUS_COLORS[task.status]} />
         <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{task.name}</span>
@@ -1551,7 +1919,7 @@ function DetailView({
         </span>
       </div>
 
-      <DetailField label={t("task.detail.schedule")} value={`${scheduleLabel} · ${task.schedule.timezone}`} />
+      <DetailField label={t("task.detail.schedule")} value={`${label} · ${task.schedule.timezone}`} mono={task.schedule.type === "cron"} />
       <DetailField label={t("task.detail.nextRun")} value={formatRelativeNext(task.nextRunAt)} />
       <DetailField label={t("task.detail.workspace")} value={task.cwd} mono />
       <DetailField
@@ -1623,8 +1991,24 @@ function DetailField({
   mono?: boolean;
 }) {
   return (
-    <div style={{ display: "flex", gap: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-      <div style={{ width: 110, flexShrink: 0, fontSize: 11, color: "var(--text-dim)", paddingTop: 2 }}>
+    <div
+      style={{
+        display: "flex",
+        gap: 12,
+        padding: "6px 0",
+        borderBottom: "1px solid var(--border)",
+        flexWrap: "wrap",
+      }}
+    >
+      <div
+        style={{
+          width: 110,
+          flexShrink: 0,
+          fontSize: 11,
+          color: "var(--text-dim)",
+          paddingTop: 2,
+        }}
+      >
         {label}
       </div>
       <div
@@ -1633,6 +2017,8 @@ function DetailField({
           color: "var(--text)",
           fontFamily: mono ? "var(--font-mono)" : "inherit",
           wordBreak: "break-word",
+          flex: 1,
+          minWidth: 0,
         }}
       >
         {value}
@@ -1679,7 +2065,7 @@ function RunsView({ task }: { task: TaskDto }) {
   }, [runs, load]);
 
   return (
-    <div style={{ maxWidth: 700 }}>
+    <div style={{ maxWidth: VIEW_MAX_WIDTH, margin: "0 auto" }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 12 }}>
         {t("task.runs.title")} — {task.name}
       </div>
@@ -1823,6 +2209,8 @@ function RunCard({
             <div style={{ marginTop: 4 }}>
               <a
                 href={`/?session=${encodeURIComponent(run.sessionId)}`}
+                target="_blank"
+                rel="noopener noreferrer"
                 style={secondaryButtonStyle()}
               >
                 {t("task.runs.openSession")}
@@ -1831,6 +2219,70 @@ function RunCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Unsaved-changes confirmation (rendered above the modal content)
+// ---------------------------------------------------------------------------
+
+function UnsavedConfirmDialog({
+  title,
+  body,
+  discardLabel,
+  keepLabel,
+  onDiscard,
+  onKeep,
+}: {
+  title: string;
+  body: string;
+  discardLabel: string;
+  keepLabel: string;
+  onDiscard: () => void;
+  onKeep: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        background: "rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onKeep();
+      }}
+    >
+      <div
+        style={{
+          width: 320,
+          maxWidth: "calc(100% - 32px)",
+          background: "var(--bg)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.24)",
+          padding: 16,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
+          {title}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 14 }}>
+          {body}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" onClick={onKeep} style={secondaryButtonStyle()}>
+            {keepLabel}
+          </button>
+          <button type="button" onClick={onDiscard} style={dangerButtonStyle()}>
+            {discardLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

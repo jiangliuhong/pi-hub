@@ -14,7 +14,10 @@ export {
   calculateNextRun,
   previewNextRun,
   cronFromDaily,
-  nextDailyRun,
+  validateCronExpression,
+  nextCronRun,
+  nextCronRuns,
+  isDailyCronPattern,
 } from "./schedule-calculator";
 export { SchedulerError, SchedulerErrorCode, validationError } from "./errors";
 export { NoopTaskNotifier } from "./task-notifier";
@@ -33,6 +36,7 @@ export type {
   ScheduleKind,
   ScheduleInput,
   DailyScheduleInput,
+  CronScheduleInput,
   OnceScheduleInput,
   PersistedSchedule,
   ExecutionOptions,

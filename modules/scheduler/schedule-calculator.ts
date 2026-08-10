@@ -12,6 +12,8 @@
  * cron/tz library and correctly handles DST gaps and folds.
  */
 
+import { CronExpressionParser } from "cron-parser";
+
 import { SchedulerError, SchedulerErrorCode } from "./errors";
 import type {
   DailyScheduleInput,
@@ -27,6 +29,15 @@ import type {
 const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const LOCAL_DATETIME_REGEX =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/;
+
+/** Max accepted cron expression length (design doc: ≤ 256 chars). */
+const MAX_CRON_LENGTH = 256;
+/**
+ * Tokens cron-parser accepts (L, #) but Pi Hub does NOT support (design doc:
+ * no Quartz L/W/# or Jenkins H). W and H are also rejected by cron-parser,
+ * but listing them here yields a clearer error before parsing even starts.
+ */
+const UNSUPPORTED_CRON_TOKEN = /[LWH#]/;
 
 /** Returns the IANA offset (minutes east of UTC) for `epochMs` in `zone`. */
 export function offsetMinutesForZone(epochMs: number, zone: string): number {
@@ -126,8 +137,8 @@ function localToEpoch(
 
 /**
  * Cron-style expression for a daily task: "M H * * *" with unpadded numeric
- * fields (e.g. "0 8 * * *" for 08:00), matching design doc §11.2. The parser
- * in calculateNextRun accepts both padded and unpadded forms.
+ * fields (e.g. "0 8 * * *" for 08:00), matching design doc §11.2. cron-parser
+ * accepts both padded and unpadded forms.
  */
 export function cronFromDaily(time: string): string {
   const m = TIME_REGEX.exec(time);
@@ -138,6 +149,102 @@ export function cronFromDaily(time: string): string {
     );
   }
   return `${Number(m[2])} ${Number(m[1])} * * *`;
+}
+
+// ---------------------------------------------------------------------------
+// Standard 5-field cron (design doc §"Cron 解析")
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates + normalizes a 5-field cron expression.
+ *
+ * Enforces the design-doc restrictions: non-empty, ≤ 256 chars, exactly five
+ * whitespace-separated fields (so 6-field seconds expressions are rejected),
+ * no Quartz L/W/# or Jenkins H tokens, and syntactic validity via
+ * cron-parser. Returns the whitespace-normalized string.
+ */
+export function validateCronExpression(expression: string): string {
+  if (typeof expression !== "string" || !expression.trim()) {
+    throw new SchedulerError(
+      SchedulerErrorCode.INVALID_CRON,
+      "Cron expression is required",
+    );
+  }
+  const normalized = expression.trim().replace(/\s+/g, " ");
+  if (normalized.length > MAX_CRON_LENGTH) {
+    throw new SchedulerError(
+      SchedulerErrorCode.INVALID_CRON,
+      `Cron expression too long (max ${MAX_CRON_LENGTH} chars)`,
+    );
+  }
+  const fields = normalized.split(" ");
+  if (fields.length !== 5) {
+    throw new SchedulerError(
+      SchedulerErrorCode.INVALID_CRON,
+      `Cron expression must have exactly 5 fields (minute hour day-of-month month day-of-week); got ${fields.length}`,
+    );
+  }
+  if (UNSUPPORTED_CRON_TOKEN.test(normalized)) {
+    throw new SchedulerError(
+      SchedulerErrorCode.INVALID_CRON,
+      "Cron expression uses an unsupported token (L/W/#/H are not supported)",
+    );
+  }
+  try {
+    CronExpressionParser.parse(normalized, { tz: "UTC" });
+  } catch {
+    throw new SchedulerError(
+      SchedulerErrorCode.INVALID_CRON,
+      `Invalid cron expression: ${expression}`,
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Computes the next UTC epoch ms a cron expression fires, strictly after
+ * `afterMs`. Timezone + DST handling is delegated to cron-parser.
+ */
+export function nextCronRun(
+  expression: string,
+  timezone: string,
+  afterMs: number,
+): number {
+  const interval = CronExpressionParser.parse(expression, {
+    currentDate: new Date(afterMs),
+    tz: timezone,
+  });
+  return interval.next().toDate().getTime();
+}
+
+/** Computes the next `count` run times (UTC epoch ms), strictly after afterMs. */
+export function nextCronRuns(
+  expression: string,
+  timezone: string,
+  afterMs: number,
+  count: number,
+): number[] {
+  const interval = CronExpressionParser.parse(expression, {
+    currentDate: new Date(afterMs),
+    tz: timezone,
+  });
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(interval.next().toDate().getTime());
+  }
+  return out;
+}
+
+/**
+ * True iff `cron` is a simple daily pattern "M H * * *" (single literal
+ * minute + hour). Used by the DTO layer to map a persisted recurring task
+ * back to the "daily" UI kind instead of the generic "cron" kind.
+ */
+export function isDailyCronPattern(
+  cron: string | null | undefined,
+): boolean {
+  if (!cron) return false;
+  return /^\d{1,2} \d{1,2} \* \* \*$/.test(cron.trim());
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +265,19 @@ export function resolveSchedule(input: ScheduleInput): ResolvedSchedule {
   if (input.type === "daily") {
     assertValidDaily(input);
     const cron = cronFromDaily(input.time);
-    const next = nextDailyRun(input.time, input.timezone, Date.now());
+    const next = nextCronRun(cron, input.timezone, Date.now());
+    return {
+      scheduleType: "recurring",
+      cronExpression: cron,
+      executeAt: null,
+      timezone: input.timezone,
+      nextRunAt: next,
+    };
+  }
+  if (input.type === "cron") {
+    assertValidTimezone(input.timezone);
+    const cron = validateCronExpression(input.cronExpression);
+    const next = nextCronRun(cron, input.timezone, Date.now());
     return {
       scheduleType: "recurring",
       cronExpression: cron,
@@ -182,66 +301,10 @@ export function resolveSchedule(input: ScheduleInput): ResolvedSchedule {
 }
 
 /**
- * Computes the next UTC epoch ms a daily "HH:MM in zone" should fire, at or
- * strictly after `fromMs`. Iterates day-by-day from today (zone-local) up to
- * a week ahead — enough to cross DST boundaries without an unbounded loop.
- */
-export function nextDailyRun(
-  time: string,
-  zone: string,
-  fromMs: number,
-): number {
-  const m = TIME_REGEX.exec(time);
-  if (!m) {
-    throw new SchedulerError(
-      SchedulerErrorCode.INVALID_SCHEDULE,
-      `Invalid daily time: ${time}`,
-    );
-  }
-  const hour = Number(m[1]);
-  const minute = Number(m[2]);
-
-  // Find the zone-local Y/M/D of `fromMs`.
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: zone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = fmt.formatToParts(new Date(fromMs));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
-  let year = get("year");
-  let month = get("month");
-  let day = get("day");
-
-  for (let i = 0; i < 8; i++) {
-    const candidate = localToEpoch(year, month, day, hour, minute, 0, zone);
-    if (candidate > fromMs) return candidate;
-    // Advance one zone-local day. Use UTC math on a noon anchor to avoid any
-    // DST edge when adding ~24h, then re-derive local fields.
-    const anchor = localToEpoch(year, month, day, 12, 0, 0, zone) + 86400000;
-    const np = new Intl.DateTimeFormat("en-US", {
-      timeZone: zone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date(anchor));
-    year = Number(np.find((p) => p.type === "year")?.value);
-    month = Number(np.find((p) => p.type === "month")?.value);
-    day = Number(np.find((p) => p.type === "day")?.value);
-  }
-  // Should be unreachable for valid inputs.
-  throw new SchedulerError(
-    SchedulerErrorCode.INVALID_SCHEDULE,
-    `Could not resolve next daily run for ${time} in ${zone}`,
-  );
-}
-
-/**
  * Computes the next run for an already-persisted task, at or strictly after
  * `afterMs`. For once-tasks returns `executeAt` (which may be in the past).
+ * For recurring tasks the stored 5-field cron (daily or general) is evaluated
+ * via cron-parser in the task's own timezone (DST-aware).
  */
 export function calculateNextRun(
   schedule: PersistedSchedule,
@@ -250,30 +313,18 @@ export function calculateNextRun(
   if (schedule.scheduleType === "once") {
     return schedule.executeAt ?? afterMs;
   }
-  // recurring: parse "M H * * *" — V1 only supports daily expressions.
-  const parts = (schedule.cronExpression ?? "").split(/\s+/);
-  const minuteRaw = Number(parts[0]);
-  const hourRaw = Number(parts[1]);
-  if (
-    parts.length !== 5 ||
-    parts.slice(2).some((p) => p !== "*") ||
-    !Number.isInteger(minuteRaw) ||
-    !Number.isInteger(hourRaw) ||
-    minuteRaw < 0 ||
-    minuteRaw > 59 ||
-    hourRaw < 0 ||
-    hourRaw > 23
-  ) {
+  try {
+    return nextCronRun(
+      schedule.cronExpression ?? "",
+      schedule.timezone,
+      afterMs,
+    );
+  } catch {
     throw new SchedulerError(
       SchedulerErrorCode.INVALID_CRON,
-      `Unsupported cron expression: ${schedule.cronExpression}`,
+      `Unsupported or invalid cron expression: ${schedule.cronExpression}`,
     );
   }
-  // Re-pad to the HH:MM shape nextDailyRun expects (handles both "0 8" and "00 08").
-  const time = `${hourRaw.toString().padStart(2, "0")}:${minuteRaw
-    .toString()
-    .padStart(2, "0")}`;
-  return nextDailyRun(time, schedule.timezone, afterMs);
 }
 
 /** True if a due task is within its misfire grace window. */
@@ -287,17 +338,41 @@ export function withinMisfireGrace(
 
 /**
  * Preview helper for the UI: returns the next-run instant for a schedule
- * input plus its human-readable local + UTC forms. Pure / synchronous.
+ * input plus its human-readable local + UTC forms and a few upcoming run
+ * times. Pure / synchronous.
  */
-export function previewNextRun(input: ScheduleInput): {
+export interface PreviewResult {
   nextRunAt: number;
   localDisplay: string;
   utcDisplay: string;
-} {
+  /** Upcoming UTC epoch-ms run times (length depends on `runCount`). */
+  nextRuns: number[];
+}
+
+export function previewNextRun(
+  input: ScheduleInput,
+  runCount = 3,
+): PreviewResult {
   const resolved = resolveSchedule(input);
   const localDisplay = formatZoned(resolved.nextRunAt, input.timezone);
   const utcDisplay = formatUtc(resolved.nextRunAt);
-  return { nextRunAt: resolved.nextRunAt, localDisplay, utcDisplay };
+  // Derive the upcoming series from the already-resolved first run so
+  // nextRuns[0] always equals nextRunAt (avoids a second Date.now() that
+  // could straddle a cron boundary). For recurring tasks we ask cron-parser
+  // for the runs strictly after nextRunAt and prepend it.
+  const nextRuns =
+    resolved.scheduleType === "once"
+      ? [resolved.nextRunAt]
+      : [
+          resolved.nextRunAt,
+          ...nextCronRuns(
+            resolved.cronExpression ?? "",
+            input.timezone,
+            resolved.nextRunAt,
+            runCount - 1,
+          ),
+        ];
+  return { nextRunAt: resolved.nextRunAt, localDisplay, utcDisplay, nextRuns };
 }
 
 const PAD = (n: number) => n.toString().padStart(2, "0");

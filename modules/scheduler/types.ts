@@ -49,6 +49,18 @@ export interface DailyScheduleInput {
   timezone: string; // IANA, e.g. "Asia/Singapore"
 }
 
+/**
+ * Standard 5-field cron schedule input, interpreted in the given IANA
+ * timezone. Persisted as `scheduleType: "recurring"` with `cronExpression`
+ * set and `executeAt` null (design doc §"数据模型").
+ */
+export interface CronScheduleInput {
+  type: "cron";
+  /** 5-field cron: "minute hour day-of-month month day-of-week". */
+  cronExpression: string;
+  timezone: string;
+}
+
 /** One-time schedule input: local date-time in the given IANA timezone. */
 export interface OnceScheduleInput {
   type: "once";
@@ -57,7 +69,10 @@ export interface OnceScheduleInput {
   timezone: string;
 }
 
-export type ScheduleInput = DailyScheduleInput | OnceScheduleInput;
+export type ScheduleInput =
+  | DailyScheduleInput
+  | CronScheduleInput
+  | OnceScheduleInput;
 
 /** Persisted schedule representation (mirrors scheduled_tasks columns). */
 export interface PersistedSchedule {

@@ -12,11 +12,11 @@
 // ---------------------------------------------------------------------------
 
 export interface ScheduleDto {
-  type: "daily" | "once";
+  type: "daily" | "cron" | "once";
   time?: string;
   localDateTime?: string;
+  cronExpression?: string;
   timezone: string;
-  cronExpression?: string | null;
 }
 
 export interface ExecutionDto {
@@ -114,6 +114,8 @@ export interface PreviewResultDto {
   nextRunAt: string;
   localDisplay: string;
   utcDisplay: string;
+  /** Upcoming run times (ISO strings). */
+  nextRuns?: string[];
 }
 
 export interface CreateTaskPayload {
