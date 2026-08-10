@@ -29,6 +29,7 @@ import {
   triggerRun,
   updateTask,
   type CreateTaskPayload,
+  type PreviewResultDto,
   type ResumeTargetDto,
   type RetryOnRateLimitDto,
   type RunSummaryDto,
@@ -164,6 +165,27 @@ function formatDateTime(iso: string | null): string {
   )}:${pad(d.getMinutes())}`;
 }
 
+/** Formats an ISO instant in a specific IANA timezone (client-side, display only). */
+function formatZonedDateTime(iso: string, tz: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour12: false,
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(d);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("month")}-${get("day")} ${hour}:${get("minute")}`;
+  } catch {
+    return formatDateTime(iso);
+  }
+}
+
 function formatRelativeNext(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -184,6 +206,21 @@ function formatDuration(ms: number | null): string | null {
   const s = totalSec % 60;
   if (m === 0) return `${s}s`;
   return `${m}m${s.toString().padStart(2, "0")}s`;
+}
+
+/** Human-readable schedule label for list/detail views (daily / cron / once). */
+function scheduleLabel(
+  task: TaskDto,
+  t: (key: string) => string,
+): string {
+  const s = task.schedule;
+  if (s.type === "daily") {
+    return `${t("task.type.everyDay")} ${s.time ?? ""}`;
+  }
+  if (s.type === "cron") {
+    return `${t("task.type.cron")}: ${s.cronExpression ?? ""}`;
+  }
+  return `${t("task.type.oneTime")} ${s.localDateTime ?? ""}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -790,10 +827,7 @@ function TaskRow({
   onCancelDelete: () => void;
 }) {
   const { t } = useI18n();
-  const scheduleLabel =
-    task.schedule.type === "daily"
-      ? `${t("task.type.everyDay")} ${task.schedule.time ?? ""}`
-      : t("task.type.oneTime");
+  const label = scheduleLabel(task, t);
 
   return (
     <div
@@ -817,8 +851,8 @@ function TaskRow({
               {task.name}
             </span>
           </div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2 }}>
-            {scheduleLabel} · {task.schedule.timezone}
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 2, fontFamily: task.schedule.type === "cron" ? "var(--font-mono)" : "inherit" }}>
+            {label} · {task.schedule.timezone}
           </div>
           <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
             {task.status === "completed"
@@ -968,10 +1002,13 @@ function CreateTaskView({
   const [name, setName] = useState(editing?.name ?? "");
   const [cwd, setCwd] = useState(editing?.cwd ?? defaultCwd ?? "");
   const [prompt, setPrompt] = useState(editing?.prompt ?? "");
-  const [scheduleType, setScheduleType] = useState<"daily" | "once">(
+  const [scheduleType, setScheduleType] = useState<"daily" | "cron" | "once">(
     editing?.schedule.type ?? "daily",
   );
   const [time, setTime] = useState(editing?.schedule.time ?? "08:00");
+  const [cronExpression, setCronExpression] = useState(
+    editing?.schedule.cronExpression ?? "*/30 * * * *",
+  );
   const [localDateTime, setLocalDateTime] = useState(
     editing?.schedule.localDateTime ?? "",
   );
@@ -992,7 +1029,7 @@ function CreateTaskView({
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewResultDto | null>(null);
 
   // Resume mode (continue an existing session, e.g. after a rate-limit hit).
   const [resumeMode, setResumeMode] = useState<boolean>(Boolean(editing?.resume));
@@ -1045,14 +1082,16 @@ function CreateTaskView({
   const scheduleDto: ScheduleDto =
     scheduleType === "daily"
       ? { type: "daily", time, timezone }
-      : { type: "once", localDateTime: localDateTime || new Date().toISOString().slice(0, 16), timezone };
+      : scheduleType === "cron"
+        ? { type: "cron", cronExpression, timezone }
+        : { type: "once", localDateTime: localDateTime || new Date().toISOString().slice(0, 16), timezone };
 
   // Live preview of the next run.
   useEffect(() => {
     let cancelled = false;
     previewSchedule(scheduleDto)
       .then((p) => {
-        if (!cancelled) setPreview(`${p.localDisplay} · ${p.utcDisplay}`);
+        if (!cancelled) setPreview(p);
       })
       .catch(() => {
         if (!cancelled) setPreview(null);
@@ -1061,7 +1100,7 @@ function CreateTaskView({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleType, time, localDateTime, timezone]);
+  }, [scheduleType, time, cronExpression, localDateTime, timezone]);
 
   function toggleTool(tool: string) {
     setTools((prev) =>
@@ -1242,11 +1281,16 @@ function CreateTaskView({
 
       <FormSection>
         <SectionTitle>{t("task.create.schedule")}</SectionTitle>
-        <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 16, marginBottom: 10, flexWrap: "wrap" }}>
           <RadioOption
             checked={scheduleType === "daily"}
             onClick={() => setScheduleType("daily")}
             label={t("task.type.everyDay")}
+          />
+          <RadioOption
+            checked={scheduleType === "cron"}
+            onClick={() => setScheduleType("cron")}
+            label={t("task.type.cron")}
           />
           <RadioOption
             checked={scheduleType === "once"}
@@ -1278,6 +1322,21 @@ function CreateTaskView({
               />
             </label>
           )}
+          {scheduleType === "cron" && (
+            <label style={{ ...fieldLabelStyle, flexBasis: "100%" }}>
+              <FieldCaption>{t("task.create.cronExpression")}</FieldCaption>
+              <input
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                value={cronExpression}
+                onChange={(e) => setCronExpression(e.target.value)}
+                placeholder="*/15 9-18 * * 1-5"
+                spellCheck={false}
+              />
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                {t("task.create.cronHint")}
+              </span>
+            </label>
+          )}
           <label style={fieldLabelStyle}>
             <FieldCaption>{t("task.create.timezone")}</FieldCaption>
             <select style={inputStyle} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
@@ -1305,7 +1364,24 @@ function CreateTaskView({
           <div style={{ fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
             {t("task.create.preview")}
           </div>
-          {preview ?? "—"}
+          {preview ? (
+            <>
+              <div>{preview.localDisplay}</div>
+              <div style={{ color: "var(--text-dim)" }}>{preview.utcDisplay}</div>
+              {preview.nextRuns && preview.nextRuns.length > 1 && (
+                <div style={{ marginTop: 4, color: "var(--text-dim)" }}>
+                  {t("task.create.upcoming")}: {preview.nextRuns.map((iso) => formatZonedDateTime(iso, timezone)).join("  ·  ")}
+                </div>
+              )}
+              {scheduleType === "cron" && cronExpression.trim() === "* * * * *" && (
+                <div style={{ marginTop: 4, color: "#f59e0b" }}>
+                  {t("task.create.cronEveryMinuteWarn")}
+                </div>
+              )}
+            </>
+          ) : (
+            "—"
+          )}
         </div>
       </FormSection>
 
@@ -1532,10 +1608,7 @@ function DetailView({
   onTogglePause: () => void;
 }) {
   const { t } = useI18n();
-  const scheduleLabel =
-    task.schedule.type === "daily"
-      ? `${t("task.type.everyDay")} ${task.schedule.time ?? ""}`
-      : `${t("task.type.oneTime")} ${task.schedule.localDateTime ?? ""}`;
+  const label = scheduleLabel(task, t);
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -1551,7 +1624,7 @@ function DetailView({
         </span>
       </div>
 
-      <DetailField label={t("task.detail.schedule")} value={`${scheduleLabel} · ${task.schedule.timezone}`} />
+      <DetailField label={t("task.detail.schedule")} value={`${label} · ${task.schedule.timezone}`} mono={task.schedule.type === "cron"} />
       <DetailField label={t("task.detail.nextRun")} value={formatRelativeNext(task.nextRunAt)} />
       <DetailField label={t("task.detail.workspace")} value={task.cwd} mono />
       <DetailField

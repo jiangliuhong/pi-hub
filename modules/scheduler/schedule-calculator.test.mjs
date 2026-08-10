@@ -6,7 +6,7 @@ const jiti = createJiti(import.meta.url);
 const {
   resolveSchedule,
   calculateNextRun,
-  nextDailyRun,
+  nextCronRun,
   previewNextRun,
   withinMisfireGrace,
   cronFromDaily,
@@ -14,47 +14,47 @@ const {
   SchedulerError,
 } = await jiti.import("./schedule-calculator.ts");
 
-// Daily: "08:00 Asia/Singapore" → next run strictly after the reference instant.
+// Daily scheduling now flows through cron-parser via cronFromDaily() ("M H * * *"),
+// the same path production uses. These assert the same expected instants the
+// old hand-rolled nextDailyRun produced.
 
 test("daily: next run is the following day when reference is exactly the target time", () => {
-  // 2026-08-07T00:00Z == 08:00 SGT. Since nextDailyRun is strictly-after,
+  // 2026-08-07T00:00Z == 08:00 SGT. Since cron-parser's next() is strictly-after,
   // the answer is the next day's 08:00 SGT (2026-08-08T00:00Z).
-  const next = nextDailyRun("08:00", "Asia/Singapore", Date.UTC(2026, 7, 7, 0, 0, 0));
+  const next = nextCronRun(cronFromDaily("08:00"), "Asia/Singapore", Date.UTC(2026, 7, 7, 0, 0, 0));
   assert.equal(new Date(next).toISOString(), "2026-08-08T00:00:00.000Z");
 });
 
 test("daily: next run is today when reference is before the target time", () => {
-  // 2026-08-07T00:00Z is 08:00 SGT; 02:00 UTC is 10:00 SGT, before 08:00? No —
-  // 08:00 SGT == 00:00 UTC, so 02:00 UTC is 10:00 SGT, AFTER 08:00 SGT → next day.
-  // Use 2026-08-06T18:00Z = 2026-08-07 02:00 SGT, before 08:00 → same day 08:00 SGT.
-  const next = nextDailyRun("08:00", "Asia/Singapore", Date.UTC(2026, 7, 6, 18, 0, 0));
+  // 2026-08-06T18:00Z = 2026-08-07 02:00 SGT, before 08:00 → same day 08:00 SGT.
+  const next = nextCronRun(cronFromDaily("08:00"), "Asia/Singapore", Date.UTC(2026, 7, 6, 18, 0, 0));
   assert.equal(new Date(next).toISOString(), "2026-08-07T00:00:00.000Z");
 });
 
 test("daily: crosses month boundary", () => {
-  // 2026-08-31T16:00Z = 2026-09-01 00:00 SGT. Next 08:00 SGT = 2026-08-31T... no:
-  // 00:00 local on Sep 1 → next 08:00 is Sep 1 08:00 SGT = 2026-09-01T00:00Z.
-  const next = nextDailyRun("08:00", "Asia/Singapore", Date.UTC(2026, 7, 31, 16, 0, 0));
+  // 2026-08-31T16:00Z = 2026-09-01 00:00 SGT → next 08:00 is Sep 1 08:00 SGT.
+  const next = nextCronRun(cronFromDaily("08:00"), "Asia/Singapore", Date.UTC(2026, 7, 31, 16, 0, 0));
   assert.equal(new Date(next).toISOString(), "2026-09-01T00:00:00.000Z");
 });
 
 test("daily: crosses year boundary", () => {
   // 2026-12-31T16:00Z = 2027-01-01 00:00 SGT → next 08:00 SGT = 2027-01-01T00:00Z.
-  const next = nextDailyRun("08:00", "Asia/Singapore", Date.UTC(2026, 11, 31, 16, 0, 0));
+  const next = nextCronRun(cronFromDaily("08:00"), "Asia/Singapore", Date.UTC(2026, 11, 31, 16, 0, 0));
   assert.equal(new Date(next).toISOString(), "2027-01-01T00:00:00.000Z");
 });
 
 test("daily: different timezone (UTC) — 09:30 UTC", () => {
-  const next = nextDailyRun("09:30", "UTC", Date.UTC(2026, 7, 7, 9, 30, 0));
+  const next = nextCronRun(cronFromDaily("09:30"), "UTC", Date.UTC(2026, 7, 7, 9, 30, 0));
   assert.equal(new Date(next).toISOString(), "2026-08-08T09:30:00.000Z");
 });
 
 test("daily: DST start (spring forward) — America/New_York 02:30 does not exist", () => {
   // US 2026 DST starts 2026-03-08 02:00 EST → clocks jump to 03:00 EDT.
-  // 02:30 local does not exist. We just need a deterministic, valid future instant
-  // (no infinite loop, no throw). Assert it lands on 2026-03-08 or 2026-03-09.
+  // 02:30 local does not exist. cron-parser falls forward to a single valid
+  // instant that day (03:30 EDT); we only assert a deterministic, valid future
+  // instant in March (no infinite loop, no throw, runs once).
   const ref = Date.UTC(2026, 2, 7, 12, 0, 0); // 2026-03-07 noon UTC
-  const next = nextDailyRun("02:30", "America/New_York", ref);
+  const next = nextCronRun(cronFromDaily("02:30"), "America/New_York", ref);
   const d = new Date(next);
   assert.ok(d.getUTCMonth() === 2 && (d.getUTCDate() === 8 || d.getUTCDate() === 9));
 });

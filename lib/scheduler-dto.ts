@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 
 import {
   SchedulerError,
+  isDailyCronPattern,
   type TaskDefinition,
   type TaskRun,
   type TaskRunSummary,
@@ -33,28 +34,39 @@ function iso(ms: number | null | undefined): string | null {
 // ---------------------------------------------------------------------------
 
 export interface ScheduleDto {
-  type: "daily" | "once";
+  type: "daily" | "cron" | "once";
   /** Local time for daily, e.g. "08:00". */
   time?: string;
   /** Local date-time for once, e.g. "2026-08-08T10:00:00". */
   localDateTime?: string;
+  /** Cron expression for cron, e.g. a 5-field minute-hour-day-month-weekday expr. */
+  cronExpression?: string;
   timezone: string;
-  /** Original cron expression (for transparency; not user-editable in V1). */
-  cronExpression?: string | null;
 }
 
-/** Derives the frontend-facing schedule from a persisted task. */
+/**
+ * Derives the frontend-facing schedule from a persisted task. A recurring
+ * task whose cron is a simple "M H * * *" maps to "daily"; any other
+ * recurring cron maps to "cron".
+ */
 export function scheduleToDto(task: TaskDefinition): ScheduleDto {
   if (task.schedule.scheduleType === "recurring") {
-    // "M H * * *" -> parse hour/minute
-    const parts = (task.schedule.cronExpression ?? "").split(/\s+/);
-    const minute = parts[0] ?? "0";
-    const hour = parts[1] ?? "0";
+    const cron = task.schedule.cronExpression ?? "";
+    if (isDailyCronPattern(cron)) {
+      // "M H * * *" -> parse hour/minute for the daily UI control.
+      const parts = cron.split(/\s+/);
+      const minute = parts[0] ?? "0";
+      const hour = parts[1] ?? "0";
+      return {
+        type: "daily",
+        time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`,
+        timezone: task.schedule.timezone,
+      };
+    }
     return {
-      type: "daily",
-      time: `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`,
+      type: "cron",
+      cronExpression: cron,
       timezone: task.schedule.timezone,
-      cronExpression: task.schedule.cronExpression,
     };
   }
   // once: reconstruct local date-time in the task timezone
