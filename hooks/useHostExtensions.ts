@@ -83,6 +83,12 @@ function ensureInit(): void {
   window.addEventListener("message", handleMessage);
 }
 
+// Install the listener as soon as the client module evaluates, rather than
+// waiting for useSyncExternalStore's effect subscription. The embedding
+// Desktop sends its registration from the iframe load callback, which can
+// otherwise race the first React effect and lose the one-time message.
+if (typeof window !== "undefined") ensureInit();
+
 function subscribe(cb: () => void): () => void {
   ensureInit();
   listeners.add(cb);

@@ -11,6 +11,11 @@ import {
   isBase64ImageWithinLimits,
 } from "@/lib/image-attachments";
 import {
+  applyPastedText,
+  clampTextareaHeight,
+  classifyClipboard,
+} from "@/lib/chat-input-paste";
+import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
   type AtQueryMatch, type FileIndexEntry,
 } from "@/lib/file-fuzzy";
@@ -413,6 +418,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
   const pendingImageCountRef = useRef(0);
+  const suppressNextBeforeInputRef = useRef(false);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
 
@@ -426,8 +432,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       requestAnimationFrame(() => {
         if (!ta) return;
         ta.focus();
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
     },
     replaceMessage(message: UserMessage) {
@@ -445,8 +449,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       requestAnimationFrame(() => {
         if (!ta) return;
         ta.focus();
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
     },
     prependText(text: string) {
@@ -462,8 +464,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         if (!ta) return;
         ta.focus();
         ta.setSelectionRange(combined.length, combined.length);
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
     },
     insertText(text: string) {
@@ -485,8 +485,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         const pos = start + sep.length + text.length;
         ta.setSelectionRange(pos, pos);
         ta.focus();
-        ta.style.height = "auto";
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
       });
     },
     addImages(files: File[]) {
@@ -555,9 +553,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (draftKey) clearDraft(draftKey);
     if (draftKeyRef.current && draftKeyRef.current !== draftKey) clearDraft(draftKeyRef.current);
     clearImages();
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
   }, [clearImages, draftKey]);
 
   useEffect(() => {
@@ -590,12 +585,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, [draftKey]);
 
-  useEffect(() => {
+  const resizeTextarea = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    if (value) ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, [value]);
+    ta.style.height = `${clampTextareaHeight(ta.scrollHeight)}px`;
+  }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(resizeTextarea);
+    return () => cancelAnimationFrame(frame);
+  }, [resizeTextarea, value]);
 
   useEffect(() => {
     return () => {
@@ -768,8 +768,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (!el) return;
       el.focus();
       el.setSelectionRange(newPos, newPos);
-      el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
     });
   }, [atQuery, value]);
 
@@ -813,8 +811,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (!ta) return;
       ta.focus();
       ta.setSelectionRange(text.length, text.length);
-      ta.style.height = "auto";
-      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     });
   }, []);
 
@@ -828,8 +824,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (!ta) return;
       ta.focus();
       ta.setSelectionRange(nextValue.length, nextValue.length);
-      ta.style.height = "auto";
-      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     });
   }, []);
 
@@ -1019,21 +1013,59 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     [isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
   );
 
-  const handleInput = useCallback(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  }, []);
+  const insertPastedText = useCallback((ta: HTMLTextAreaElement, text: string) => {
+    const result = applyPastedText(
+      ta.value,
+      ta.selectionStart ?? ta.value.length,
+      ta.selectionEnd ?? ta.value.length,
+      text,
+    );
+    setValue(result.value);
+    setHistoryMenuOpen(false);
+    updateAtQuery(result.value, result.caret);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(result.caret, result.caret);
+    });
+  }, [updateAtQuery]);
 
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItems = items.filter((item) => item.type.startsWith("image/"));
-    if (!imageItems.length) return;
+    const clipboard = classifyClipboard(items, e.clipboardData?.getData("text/plain") ?? "");
+    if (!clipboard.hasText && !clipboard.hasImages) return;
+
     e.preventDefault();
-    const files = imageItems.map((item) => item.getAsFile()).filter((f): f is File => f !== null);
-    processImageFiles(files);
-  }, [processImageFiles]);
+    if (clipboard.hasText) {
+      // WebKit may dispatch beforeinput after paste even when this handler has
+      // already inserted the text. Consume that follow-up event once.
+      suppressNextBeforeInputRef.current = true;
+      insertPastedText(e.currentTarget, clipboard.text);
+      requestAnimationFrame(() => {
+        suppressNextBeforeInputRef.current = false;
+      });
+    }
+    if (clipboard.hasImages) processImageFiles(clipboard.imageFiles);
+  }, [insertPastedText, processImageFiles]);
+
+  const handleBeforeInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
+    const nativeEvent = e.nativeEvent as InputEvent;
+    if (nativeEvent.inputType !== "insertFromPaste") return;
+    if (suppressNextBeforeInputRef.current) {
+      suppressNextBeforeInputRef.current = false;
+      e.preventDefault();
+      return;
+    }
+
+    // Some WKWebView versions expose paste text through beforeinput instead
+    // of ClipboardEvent.clipboardData. Only use the text/plain-equivalent
+    // payload supplied by this user-initiated input event.
+    const text = nativeEvent.data ?? nativeEvent.dataTransfer?.getData("text/plain") ?? "";
+    if (!text) return;
+    e.preventDefault();
+    insertPastedText(e.currentTarget, text);
+  }, [insertPastedText]);
 
   useEffect(() => {
     if (slashQuery === null) {
@@ -1707,7 +1739,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               const el = e.currentTarget;
               updateAtQuery(el.value, el.selectionStart);
             }}
-            onInput={handleInput}
+            onBeforeInput={handleBeforeInput}
             onPaste={handlePaste}
             placeholder={
               isStreaming && (onSteer || onFollowUp)
