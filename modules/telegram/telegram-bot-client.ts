@@ -12,7 +12,7 @@
  * `Bot` plus a raw `Api` for connection tests.
  */
 
-import { Bot, Api } from "grammy";
+import { Bot, Api, type Transformer } from "grammy";
 import { TelegramError, TelegramErrorCode } from "./errors";
 import type { TelegramErrorCodeValue } from "./errors";
 
@@ -35,6 +35,48 @@ export function isValidBotTokenShape(token: string): boolean {
 }
 
 /**
+ * Detects the `deleteWebhook` 400 returned by self-hosted / relay Bot API
+ * servers that do not manage webhook delivery state.
+ */
+function isUnsupportedDeleteWebhookResponse(res: {
+  ok: boolean;
+  error_code?: number;
+  description?: string;
+}): boolean {
+  return (
+    res.ok === false &&
+    res.error_code === 400 &&
+    /deleteWebhook is not supported|webhook delivery state/i.test(res.description ?? "")
+  );
+}
+
+/**
+ * Grammy API transformer that tolerates Bot API servers which reject
+ * `deleteWebhook` (400 "method deleteWebhook is not supported: webhook
+ * delivery state requires downstream support").
+ *
+ * Grammy calls `deleteWebhook` unconditionally inside `bot.start()` before
+ * long polling, so without this shim such servers never reach the polling
+ * loop and startup aborts with `TELEGRAM_API_ROOT_RESPONSE_INVALID`.
+ *
+ * The server hands the `{ ok: false }` envelope to the transformer chain
+ * *before* Grammy would convert it into a thrown error (grammy
+ * `ApiClient.callApi`), so we can rewrite that specific envelope to
+ * success. On servers that fully implement `deleteWebhook` (official cloud
+ * + a proper `tdlib/telegram-bot-api`) the genuine `{ ok: true }` envelope
+ * passes through unchanged, so any real webhook is still cleared.
+ */
+function tolerateUnsupportedDeleteWebhook(): Transformer {
+  return async (prev, method, payload, signal) => {
+    const res = await prev(method, payload, signal);
+    if (method === "deleteWebhook" && isUnsupportedDeleteWebhookResponse(res)) {
+      return { ok: true, result: true } as never;
+    }
+    return res;
+  };
+}
+
+/**
  * Builds a configured Grammy Bot. The apiRoot is normalized by the caller
  * (`normalizeApiRoot`); we only pass it through to Grammy.
  */
@@ -43,13 +85,16 @@ export function createBot(options: BotClientOptions): Bot {
   if (!token) {
     throw makeError(TelegramErrorCode.TELEGRAM_TOKEN_MISSING, "bot token is missing");
   }
-  return new Bot(token, {
+  const bot = new Bot(token, {
     client: {
       apiRoot,
       timeoutSeconds: Math.ceil(timeoutMs / 1000),
-      ...(options.client ? { client: options.client } : {}),
+      ...(options.client ?? {}),
     },
   });
+  // Tolerate self-hosted/relay servers that reject deleteWebhook (see above).
+  bot.api.config.use(tolerateUnsupportedDeleteWebhook());
+  return bot;
 }
 
 /**
@@ -65,7 +110,7 @@ export function createApi(options: BotClientOptions): Api {
   return new Api(token, {
     apiRoot,
     timeoutSeconds: Math.ceil(timeoutMs / 1000),
-    ...(options.client ? { client: options.client } : {}),
+    ...(options.client ?? {}),
   });
 }
 
