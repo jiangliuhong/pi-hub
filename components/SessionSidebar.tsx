@@ -5,6 +5,7 @@ import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
+import { HostExtensionSlot } from "./HostExtensionSlot";
 
 declare global {
   interface Window {
@@ -960,6 +961,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </svg>
               )}
             </button>
+            {/* Host Extension Protocol V1 slot: host-registered controls
+                render here immediately after the refresh button. Renders
+                nothing in a standalone browser. */}
+            <HostExtensionSlot slot="sidebar.header.after_refresh" />
           </div>
         </div>
 
