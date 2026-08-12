@@ -10,11 +10,37 @@ if (!isNodeVersionSupported(process.versions.node)) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { spawn } = require("child_process");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require("path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require("fs");
+
+// Non-server subcommands (--version, doctor) are dispatched BEFORE any server
+// spawn so they never start an HTTP server, open a port, or launch a browser.
+// cli-dispatch does not import child_process; doctor/v1 logic is fully offline.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { dispatchCommand } = require("./cli-dispatch");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { runDoctorChecks, renderDoctorJson } = require("./doctor");
+
+const dispatchResult = dispatchCommand(process.argv.slice(2), {
+  runDoctor: () => {
+    const result = runDoctorChecks();
+    if (result.exitCode === 0) {
+      process.stdout.write(renderDoctorJson(result));
+    } else {
+      process.stderr.write(renderDoctorJson(result));
+    }
+    return { handled: true, exitCode: result.exitCode };
+  },
+});
+if (dispatchResult.handled) {
+  if (dispatchResult.stdout) process.stdout.write(dispatchResult.stdout);
+  if (dispatchResult.stderr) process.stderr.write(dispatchResult.stderr);
+  process.exit(dispatchResult.exitCode);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { spawn } = require("child_process");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { parseLaunchOptions, getEnv } = require("./pi-web-options");
 

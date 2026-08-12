@@ -42,6 +42,37 @@ PI_HUB_NO_OPEN=1 pi-hub         # 适用于后台服务或开机自启
 
 环境变量支持 `PI_HUB_`（推荐）和 `PI_WEB_`（兼容上游 pi-web 的旧名称）两种前缀。
 
+### 机器可读的版本与健康检查
+
+Pi Hub 提供两个稳定、仅输出 JSON 的命令，供自动化、桌面宿主和 CI 使用。两者都**不会**启动 HTTP 服务器、监听端口、打开浏览器、调用模型 API、刷新 OAuth，也不会发起任何网络请求。
+
+```bash
+pi-hub --version --json
+```
+
+```json
+{"schemaVersion":1,"name":"@jarome/pi-hub","version":"0.0.8"}
+```
+
+```bash
+pi-hub doctor --json --offline
+```
+
+```json
+{"schemaVersion":1,"status":"healthy","checks":[{"name":"nodeVersion","status":"pass","detail":"24.10.0"},...]}
+```
+
+`doctor` 在 `healthy` 时将 JSON 写入 **stdout**，否则写入 **stderr**；退出码始终是判断结果的唯一依据：
+
+| 退出码 | 含义                                                                    |
+| ------ | ----------------------------------------------------------------------- |
+| `0`    | `--version` 成功，或 `doctor` 健康。                                    |
+| `2`    | 参数错误（未知参数、缺少 `--json`/`--offline`）。                       |
+| `3`    | `doctor`：blocked — Node 版本过低，或 Pi Hub 主目录不可写。             |
+| `4`    | `doctor`：degraded — 可运行，但有检查项告警（例如缺少构建产物）。       |
+
+凭据和环境变量的值永远不会被输出；`doctor` 只报告解析后的目录路径和环境变量是否设置的布尔值。完整稳定契约见 [docs/pi-hub/pi-hub-cli-contract-v1.md](./docs/pi-hub/pi-hub-cli-contract-v1.md)。
+
 设置 `PI_HUB_PASSWORD` 后，网页和所有 API 端点都会启用 HTTP Basic Auth，用户名固定为 `pi`。未设置或设置为空值时不启用认证。
 
 Pi Web 可以调用高权限智能体。Basic Auth 不会加密传输中的密码，因此不要把明文 HTTP 暴露到互联网。远程访问时应使用可信反向代理提供 HTTPS，或通过可信 VPN 访问。
