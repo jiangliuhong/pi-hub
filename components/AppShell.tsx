@@ -414,6 +414,13 @@ export function AppShell() {
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
   }, [router, hydrateSelectedSession]);
 
+  // Called as soon as a new session's real id is resolved (first message),
+  // before the first assistant message lands. Refreshing the sidebar here
+  // makes the new session appear immediately instead of after the first turn.
+  const handleSessionIdResolved = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
+
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
@@ -1510,6 +1517,7 @@ export function AppShell() {
               newSessionCwd={effectiveNewSessionCwd}
               onAgentEnd={handleAgentEnd}
               onSessionCreated={handleSessionCreated}
+              onSessionIdResolved={handleSessionIdResolved}
               onSessionForked={handleSessionForked}
               modelsRefreshKey={modelsRefreshKey}
               chatInputRef={chatInputRef}

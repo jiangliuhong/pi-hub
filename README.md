@@ -44,6 +44,37 @@ PI_HUB_NO_OPEN=1 pi-hub         # useful when running as a background service
 
 > Environment variables can be prefixed with either `PI_HUB_` (preferred) or `PI_WEB_` (legacy, for backward compatibility with upstream pi-web).
 
+### Machine-readable version and health checks
+
+Pi Hub exposes two stable, JSON-only commands for automation, Desktop hosts, and CI. Neither starts an HTTP server, opens a port, opens a browser, calls a model API, refreshes OAuth, or makes any network request.
+
+```bash
+pi-hub --version --json
+```
+
+```json
+{"schemaVersion":1,"name":"@jarome/pi-hub","version":"0.0.8"}
+```
+
+```bash
+pi-hub doctor --json --offline
+```
+
+```json
+{"schemaVersion":1,"status":"healthy","checks":[{"name":"nodeVersion","status":"pass","detail":"24.10.0"},...]}
+```
+
+`doctor` writes JSON to **stdout** when healthy and to **stderr** otherwise; the exit code is always the source of truth:
+
+| Exit code | Meaning                                                                 |
+| --------- | ----------------------------------------------------------------------- |
+| `0`       | `--version` success, or `doctor` healthy.                               |
+| `2`       | Argument/usage error (unknown flag, missing `--json`/`--offline`).      |
+| `3`       | `doctor`: blocked — Node too old, or Pi Hub home not writable.          |
+| `4`       | `doctor`: degraded — usable, but some checks warn (e.g. no build).      |
+
+Credentials and environment-variable values are never emitted; `doctor` only reports resolved directory paths and booleans for env-var presence. See [docs/pi-hub/pi-hub-cli-contract-v1.md](./docs/pi-hub/pi-hub-cli-contract-v1.md) for the full stable contract.
+
 Set `PI_HUB_PASSWORD` to protect the web interface and every API endpoint with HTTP Basic Auth. The username is always `pi`. Leaving the variable unset or empty disables authentication.
 
 Pi Web can invoke a high-privilege agent. Basic Auth does not encrypt the password in transit, so do not expose plain HTTP to the internet. Use HTTPS through a trusted reverse proxy or a trusted VPN for remote access.
