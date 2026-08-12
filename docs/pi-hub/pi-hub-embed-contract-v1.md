@@ -16,7 +16,7 @@ Initial Desktop extension:
 ```text
 slot: sidebar.header.after_refresh
 control: menu
-item: 返回列表
+items: 返回列表, 设置
 ```
 
 ## 2. Responsibility boundary
@@ -78,10 +78,8 @@ Desktop sends this after every iframe `load` event:
       "icon": "more_horizontal",
       "ariaLabel": "Pi Hub Client 菜单",
       "items": [
-        {
-          "id": "return_to_services",
-          "label": "返回列表"
-        }
+        { "id": "return_to_services", "label": "返回列表" },
+        { "id": "open_settings", "label": "设置" }
       ]
     }
   ]
@@ -98,6 +96,22 @@ Registration semantics:
 - no extension UI appears in a normal browser unless an embedding host registers it.
 
 ## 5. Pi Hub → Desktop event
+
+When the user clicks the settings action, Pi Hub replies with the same
+validated event shape:
+
+```json
+{
+  "channel": "pi-hub-host-extension",
+  "protocolVersion": 1,
+  "type": "extension_event",
+  "extensionId": "pi-hub-client-menu",
+  "itemId": "open_settings",
+  "event": "activate"
+}
+```
+
+Desktop translates this event into its existing global settings-dialog action.
 
 When the user selects “返回列表”, Pi Hub replies to the validated parent origin:
 
