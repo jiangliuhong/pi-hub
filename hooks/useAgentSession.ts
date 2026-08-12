@@ -154,6 +154,10 @@ export interface UseAgentSessionOptions {
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
+  /** Fires as soon as a brand-new session gets its real id from pi, before the
+   *  first assistant message lands. Lets the sidebar refresh the session list
+   *  immediately instead of waiting for the first agent turn to finish. */
+  onSessionIdResolved?: (sessionId: string) => void;
   onSessionForked?: (newSessionId: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
@@ -351,7 +355,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
-    onPromptFinished,
+    onPromptFinished, onSessionIdResolved,
   } = opts;
 
   const isNew = session === null && newSessionCwd !== null;
@@ -628,6 +632,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       };
       const realId = result.sessionId;
       sessionIdRef.current = realId;
+      // The session file now exists on disk and the server list cache is
+      // invalidated. Signal the host so the sidebar can refetch immediately,
+      // instead of waiting for the first assistant message / agent turn end.
+      onSessionIdResolved?.(realId);
       if (result.model && newSessionModelOverrideRef.current === selectedModel) {
         setPendingModel(result.model);
         if (!selectedModel) setNewSessionDefaultModel(result.model);
@@ -647,7 +655,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, toolPreset]);
+  }, [isNew, newSessionCwd, toolPreset, onSessionIdResolved]);
 
   const loadSlashCommands = useCallback(async () => {
     const sid = sessionIdRef.current ?? await ensureNewSession();
