@@ -21,6 +21,19 @@ function getEnv(env, name) {
   return env[`PI_HUB_${name}`] ?? env[`PI_WEB_${name}`];
 }
 
+function normalizePort(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new Error("Port must be a non-negative integer.");
+  }
+
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port > 65535) {
+    throw new Error("Port must be between 0 and 65535.");
+  }
+
+  return String(port);
+}
+
 function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
   const { values: cliArgs } = parseArgs({
     args,
@@ -33,10 +46,10 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
   });
 
   return {
-    port: cliArgs.port ?? env.PORT ?? "30142",
+    port: normalizePort(cliArgs.port ?? env.PORT ?? "30142"),
     hostname: cliArgs.hostname ?? getEnv(env, "HOSTNAME") ?? "127.0.0.1",
     openBrowser: !cliArgs["no-open"] && !isEnabled(getEnv(env, "NO_OPEN")),
   };
 }
 
-module.exports = { parseLaunchOptions, getEnv };
+module.exports = { parseLaunchOptions, getEnv, normalizePort };
