@@ -24,3 +24,47 @@ test("polls running sessions only while the tab is visible", () => {
   assert.match(source, /document\.visibilityState !== "visible"/);
   assert.match(source, /document\.addEventListener\("visibilitychange", onVisibilityChange\)/);
 });
+
+test("exposes the polled running-session set to the shell", () => {
+  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>\) => void/);
+  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds\)/);
+});
+
+test("includes project activity counts in accessible labels", () => {
+  assert.match(
+    source,
+    /aria-label=\{`\$\{t\("sidebar\.agentRunning"\)\} \(\$\{activity\.running\}\)`\}/,
+  );
+  assert.match(
+    source,
+    /aria-label=\{`\$\{t\("sidebar\.newSessionActivity"\)\} \(\$\{activity\.unread\}\)`\}/,
+  );
+});
+
+test("does not persist an unchanged fallback title ending in whitespace", () => {
+  assert.match(
+    sessionItemSource,
+    /const name = renameValue\.trim\(\);[\s\S]*?if \(renameValue === title \|\| name === \(session\.name \?\? ""\)\) return;/,
+  );
+});
+
+test("offers the downstream context-menu hook only on a normal session row", () => {
+  assert.match(sessionItemSource, /const handleContextMenu[\s\S]*?dispatchSessionRowContextMenu\(\{/);
+  assert.match(
+    sessionItemSource,
+    /onContextMenu=\{confirmDelete \|\| renaming \? undefined : handleContextMenu\}/,
+  );
+});
+
+test("manual and lifecycle refreshes bypass the server session-list cache", () => {
+  assert.match(source, /force \? "\/api\/sessions\?force=1" : "\/api\/sessions"/);
+  assert.match(source, /cache: "no-store"/);
+  assert.match(source, /loadSessions\(isFirst, !isFirst\)/);
+  assert.match(source, /onClick=\{\(\) => loadSessions\(false, true\)\}/);
+  assert.match(source, /loadSessions\(false, true\);[\s\S]*?onBackgroundTaskDone/);
+});
+
+test("does not expose disk-backed actions for transient sessions", () => {
+  assert.match(sessionItemSource, /if \(session\.transient\) return;/);
+  assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
+});
