@@ -50,8 +50,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -63,46 +61,41 @@ jobs:
       - name: Update npm
         run: npm install --global npm@latest
 
-      - name: Detect package version change
+      - name: Check package version on npm
         id: version
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
         shell: bash
         run: |
           set -euo pipefail
 
+          package_name="$(node -p "require('./package.json').name")"
           current="$(node -p "require('./package.json').version")"
-          previous=""
-          if [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
-            previous="$(git show "${BEFORE_SHA}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+
+          published=false
+          if npm view "${package_name}@${current}" version --json >/dev/null 2>&1; then
+            published=true
           fi
 
-          changed=false
-          if [[ -n "$previous" && "$current" != "$previous" ]]; then
-            changed=true
-          fi
-
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
           echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-          echo "package version: ${previous:-<none>} -> $current"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "package: ${package_name}@${current}, published on npm: ${published}"
 
-      - name: Skip unchanged version
-        if: steps.version.outputs.changed != 'true'
-        run: echo "Package version did not change; skipping npm publish."
+      - name: Skip already published version
+        if: steps.version.outputs.published == 'true'
+        run: echo "${{ steps.version.outputs.package_name }}@${{ steps.version.outputs.current }} already exists on npm; skipping publish."
 
       - name: Install dependencies
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.published != 'true'
         run: npm ci
 
       - name: Run tests
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.published != 'true'
         run: npm test
 
       - name: Build package
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.published != 'true'
         run: npm run build
 
       - name: Publish package
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.published != 'true'
         run: npm publish --access public
