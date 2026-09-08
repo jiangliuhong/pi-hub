@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/test-results/
 
 # next.js
 /.next/
@@ -40,6 +41,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .factory
+e2e_*.mjs
 
 # zcode
 .zcode/

@@ -1,7 +1,8 @@
-import type { Options as ReactMarkdownOptions } from "react-markdown";
+import { defaultUrlTransform, type Options as ReactMarkdownOptions } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
@@ -11,8 +12,16 @@ const markdownSanitizeSchema = {
     ...defaultSchema.attributes,
     code: [["className", /^language-./, "math-inline", "math-display"]],
   },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "file"],
+  },
   strip: [...(defaultSchema.strip || []), "iframe", "object", "style", "form"],
 };
+
+export function markdownUrlTransform(value: string): string {
+  return /^file:/i.test(value) ? value : defaultUrlTransform(value);
+}
 
 export function normalizeDisplayMath(markdown: string): string {
   const lineBreak = markdown.includes("\r\n") ? "\r\n" : "\n";
@@ -83,6 +92,19 @@ export function normalizeDisplayMath(markdown: string): string {
           `${bracketDisplayOneLine[1]}$$`,
           `${bracketDisplayOneLine[1]}${math}`,
           `${bracketDisplayOneLine[1]}$$`,
+        );
+        continue;
+      }
+    }
+
+    const looseBracketDisplayOneLine = line.match(/^([ ]{0,3})\[[ \t]*(.+?)[ \t]*\][ \t]*$/);
+    if (looseBracketDisplayOneLine) {
+      const math = looseBracketDisplayOneLine[2].trim();
+      if (isLikelyMathExpression(math)) {
+        normalized.push(
+          `${looseBracketDisplayOneLine[1]}$$`,
+          `${looseBracketDisplayOneLine[1]}${math}`,
+          `${looseBracketDisplayOneLine[1]}$$`,
         );
         continue;
       }
@@ -314,8 +336,28 @@ function normalizeInlineLatexMath(line: string): string {
   );
 }
 
-export const markdownRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [remarkGfm, remarkMath];
-export const markdownPreviewRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [remarkGfm, remarkMath];
+function isLikelyMathExpression(value: string): boolean {
+  return /\\[A-Za-z]+/.test(value) && !/\b(?:https?|file|mailto):|\b[A-Za-z]:\\|^\\\\/i.test(value);
+}
+
+// Parse YAML frontmatter into a `yaml` node before the math/GFM plugins run, so
+// the raw metadata never leaks into the rendered output (without it, the opening
+// `---` becomes an <hr> and the closing `---` turns the YAML into a setext heading).
+// singleTilde:false requires ~~double~~ tildes for strikethrough. A single `~`
+// is the standard CJK numeric-range separator (e.g. "5~7U", "100~200倍"), and
+// GFM's default single-tilde strikethrough silently mangled such ranges (#385).
+const remarkGfmOptions = { singleTilde: false } as const;
+
+export const markdownRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [
+  [remarkFrontmatter, ["yaml"]],
+  [remarkGfm, remarkGfmOptions],
+  remarkMath,
+];
+export const markdownPreviewRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [
+  [remarkFrontmatter, ["yaml"]],
+  [remarkGfm, remarkGfmOptions],
+  remarkMath,
+];
 
 export const markdownRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
   rehypeRaw,

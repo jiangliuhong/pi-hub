@@ -42,7 +42,27 @@ if (dispatchResult.handled) {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { spawn } = require("child_process");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { parseLaunchOptions, getEnv } = require("./pi-web-options");
+const { getHelpText, parseLaunchOptions, getEnv } = require("./pi-web-options");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { wireChildProcessLifecycle } = require("./process-lifecycle");
+
+let launchOptions;
+try {
+  launchOptions = parseLaunchOptions();
+} catch (error) {
+  fs.writeSync(
+    process.stderr.fd,
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
+  process.exit(1);
+}
+
+if (launchOptions.help) {
+  fs.writeSync(process.stdout.fd, getHelpText());
+  process.exit(0);
+}
+
+const { port, hostname, openBrowser } = launchOptions;
 
 const pkgDir = path.join(__dirname, "..");
 const nextDir = path.join(pkgDir, ".next");
@@ -62,7 +82,6 @@ try {
   }
 }
 
-const { port, hostname, openBrowser } = parseLaunchOptions();
 const loopbackHostnames = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const passwordEnabled = Boolean(getEnv(process.env, "PASSWORD"));
 
@@ -95,6 +114,7 @@ const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   stdio: ["inherit", "pipe", "inherit"],
   env: { ...process.env, PI_HUB_HOSTNAME: hostname, PI_WEB_HOSTNAME: hostname },
 });
+wireChildProcessLifecycle(child);
 
 let browserOpened = false;
 const url = `http://${hostname}:${port}`;
@@ -106,12 +126,30 @@ child.stdout.on("data", (chunk) => {
     browserOpened = true;
     const isWindows = process.platform === "win32";
     const isMac = process.platform === "darwin";
-    const openCmd = isWindows ? "start" : isMac ? "open" : "xdg-open";
-    const opener = spawn(openCmd, [url], {
-      shell: isWindows,
-      stdio: "ignore",
-      detached: true,
-    });
+    // Avoid `shell: true` to suppress Node.js DEP0190 deprecation
+    // ("Passing args to a child process with shell option true can lead to
+    // security vulnerabilities, as the arguments are not escaped").
+    // Pass a structured argv so Node.js handles escaping instead of
+    // concatenating the args into a shell command string.
+    let opener;
+    if (isWindows) {
+      // `start` is a cmd.exe built-in, so invoke cmd directly. The empty
+      // title argument is required by `start` before the target URL.
+      opener = spawn(process.env.ComSpec || "cmd.exe", ["/c", "start", "", url], {
+        stdio: "ignore",
+        detached: true,
+      });
+    } else if (isMac) {
+      opener = spawn("open", [url], {
+        stdio: "ignore",
+        detached: true,
+      });
+    } else {
+      opener = spawn("xdg-open", [url], {
+        stdio: "ignore",
+        detached: true,
+      });
+    }
 
     opener.on("error", (error) => {
       console.warn(`Could not open browser automatically: ${error.message}`);
@@ -120,5 +158,3 @@ child.stdout.on("data", (chunk) => {
     opener.unref();
   }
 });
-
-child.on("exit", (code) => process.exit(code ?? 0));
