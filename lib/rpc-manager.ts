@@ -8,6 +8,7 @@ import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import { readRunMeta, type PromptRunMeta } from "./prompt-run-meta";
+import { piEnv } from "./env";
 import {
   createProjectCommandBashExtension,
   createProjectCommandBashOperations,
@@ -152,7 +153,7 @@ function terminalEvent(
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Resolves the PI_WEB_IDLE_TIMEOUT_MS environment variable into a session idle
+ * Resolves PI_HUB_IDLE_TIMEOUT_MS (falling back to PI_WEB_IDLE_TIMEOUT_MS) into a session idle
  * timeout in milliseconds. An unset/blank value returns the 10-minute default,
  * `0` disables idle shutdown, and positive values up to Node's timer limit
  * (2147483647 ms) are used as-is. Invalid or out-of-range values fall back to
@@ -160,12 +161,12 @@ const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
  * @param rawValue Value to parse; defaults to the environment variable.
  */
 export function resolveSessionIdleTimeoutMs(
-  rawValue: string | undefined = process.env.PI_WEB_IDLE_TIMEOUT_MS,
+  rawValue: string | undefined = piEnv("IDLE_TIMEOUT_MS"),
 ): number {
   if (rawValue !== undefined && rawValue.trim() !== "") {
     const parsed = Number(rawValue);
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 2_147_483_647) return parsed;
-    console.warn(`[pi-web] invalid PI_WEB_IDLE_TIMEOUT_MS "${rawValue}", falling back to 10 minutes`);
+    console.warn(`[pi-hub] invalid PI_HUB_IDLE_TIMEOUT_MS / PI_WEB_IDLE_TIMEOUT_MS "${rawValue}", falling back to 10 minutes`);
   }
   return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
 }

@@ -364,8 +364,15 @@ export async function listSessionsIncremental(): Promise<ScannedSessionInfo[]> {
 
 	// Preserve catalogue order for timestamp ties, independently of cache hits
 	// and the order in which concurrent file reads complete.
-	return results.filter((info) => info !== null)
-		.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	// Default-root files precede custom-root files. Keep that precedence when
+	// users copy sessions during a directory migration, regardless of mtime.
+	// Deduplicate only the catalogue: retain both files in the metadata cache.
+	const seenIds = new Set<string>();
+	return results.filter((info) => info !== null).filter((info) => {
+		if (seenIds.has(info.id)) return false;
+		seenIds.add(info.id);
+		return true;
+	}).sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
 /** Test seam: drop all in-memory index state. */

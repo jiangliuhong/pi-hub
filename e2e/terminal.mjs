@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { isolatedServerEnv } from "./isolated-env.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 assert.ok(!existsSync(join(root, ".next/dev/lock")), "Run in a checkout without an active dev server");
@@ -42,7 +43,7 @@ const base = `http://127.0.0.1:${port}`;
 const log = createWriteStream(join(artifacts, "server.log"));
 const server = spawn(process.execPath, [join(root, "node_modules/next/dist/bin/next"), "dev", "-H", "127.0.0.1", "-p", String(port)], {
   cwd: root,
-  env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_WEB_PASSWORD: "", NEXT_TELEMETRY_DISABLED: "1", HISTFILE: process.platform === "win32" ? "NUL" : "/dev/null", BASH_SILENCE_DEPRECATION_WARNING: "1", SHELL: process.platform === "win32" ? process.env.SHELL : "/bin/bash" },
+  env: { ...isolatedServerEnv(agentDir), HISTFILE: process.platform === "win32" ? "NUL" : "/dev/null", BASH_SILENCE_DEPRECATION_WARNING: "1", SHELL: process.platform === "win32" ? process.env.SHELL : "/bin/bash" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 server.stdout.pipe(log, { end: false });
