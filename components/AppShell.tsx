@@ -1205,8 +1205,32 @@ export function AppShell() {
           <SettingsSectionIcon section="general" size={14} strokeWidth={2} />
           <span>{translate("common.settings")}</span>
         </button>
-        {[{ label: translate("common.tasks"), open: () => setTasksConfigOpen(true) }, { label: translate("common.telegramShort"), open: () => setTelegramOpen(true) }].map(({ label, open }) => (
-          <button key={label} type="button" onClick={open} title={label} style={{ flex: 1, height: 32, border: "none", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12 }}>{label}</button>
+        {[
+          { label: translate("common.tasks"), open: () => setTasksConfigOpen(true), icon: (
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m3 17 2 2 4-4" /><path d="m3 7 2 2 4-4" /><path d="M13 6h8" /><path d="M13 12h8" /><path d="M13 18h8" /></svg>
+          ) },
+          { label: translate("common.telegramShort"), open: () => setTelegramOpen(true), icon: (
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M22 2 11 13" /><path d="m22 2-7 20-4-9-9-4Z" /></svg>
+          ) },
+        ].map(({ label, open, icon }) => (
+          <button
+            key={label}
+            type="button"
+            onClick={open}
+            title={label}
+            aria-label={label}
+            style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              height: 32, padding: 0, background: "none", border: "none",
+              borderRadius: 9, color: "var(--text-muted)", cursor: "pointer",
+              fontSize: 12, transition: "background 0.12s, color 0.12s",
+            }}
+            onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; event.currentTarget.style.color = "var(--text)"; }}
+            onMouseLeave={(event) => { event.currentTarget.style.background = "none"; event.currentTarget.style.color = "var(--text-muted)"; }}
+          >
+            {icon}
+            <span>{label}</span>
+          </button>
         ))}
       </div>
     </>
